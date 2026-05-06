@@ -1,368 +1,562 @@
+// ============================================================
+//  pantalla_planificacion.dart
+//  Muestra el plan generado con badges por carrera.
+//  El plan se guarda al presionar "Ir al inicio" (sin nombre)
+//  o "Nombrar plan" (con nombre personalizado ingresado por el usuario).
+// ============================================================
+
 import 'package:flutter/material.dart';
+import '../models/plan_model.dart';
+import '../data/datos_programa.dart';
+import '../services/api_service.dart';
+import '../widgets/drawer_menu.dart';
+import 'pantalla_seleccion.dart';
 
-class PantallaPlanificacion extends StatelessWidget {
-  const PantallaPlanificacion({super.key});
+class PantallaPlanificacion extends StatefulWidget {
+  final PlanResponse planResponse;
+  final Programa? programaPrincipal;
+  final Programa? programaSecundario;
+  final String token;
+  final Map<String, dynamic> userData;
 
-  final List<Map<String, dynamic>> semestres = const [
-    {
-      'numero': 1,
-      'estado': 'completado',
-      'materias': [
-        {'nombre': 'Cálculo Diferencial', 'creditos': 4, 'estado': 'aprobada'},
-        {'nombre': 'Álgebra Lineal', 'creditos': 3, 'estado': 'aprobada'},
-        {'nombre': 'Fundamentos de Programación', 'creditos': 4, 'estado': 'aprobada'},
-        {'nombre': 'Comunicación Oral y Escrita', 'creditos': 2, 'estado': 'aprobada'},
-      ],
-    },
-    {
-      'numero': 2,
-      'estado': 'en_curso',
-      'materias': [
-        {'nombre': 'Cálculo Integral', 'creditos': 4, 'estado': 'cursando'},
-        {'nombre': 'Programación Orientada a Objetos', 'creditos': 4, 'estado': 'cursando'},
-        {'nombre': 'Estadística', 'creditos': 3, 'estado': 'cursando'},
-        {'nombre': 'Microeconomía', 'creditos': 3, 'estado': 'homologada'},
-      ],
-    },
-    {
-      'numero': 3,
-      'estado': 'planificado',
-      'materias': [
-        {'nombre': 'Estructuras de Datos', 'creditos': 4, 'estado': 'pendiente'},
-        {'nombre': 'Bases de Datos', 'creditos': 4, 'estado': 'pendiente'},
-        {'nombre': 'Gestión de Proyectos', 'creditos': 3, 'estado': 'pendiente'},
-      ],
-    },
-  ];
+  // Datos necesarios para guardar el plan
+  final Map<String, dynamic> planData;
+  final int semestresCursados;
+  final double promedio;
+  final List<String> materiasAprobadas;
+  final List<Map<String, String>> homologaciones;
+
+  const PantallaPlanificacion({
+    super.key,
+    required this.planResponse,
+    this.programaPrincipal,
+    this.programaSecundario,
+    required this.token,
+    required this.userData,
+    required this.planData,
+    required this.semestresCursados,
+    required this.promedio,
+    required this.materiasAprobadas,
+    required this.homologaciones,
+  });
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
-        foregroundColor: Colors.white,
-        elevation: 0,
+  State<PantallaPlanificacion> createState() => _PantallaPlanificacionState();
+}
+
+class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
+  final ApiService _apiService = ApiService();
+  bool _guardando = false;
+
+  Color _getOrigenColor(String origen) {
+    switch (origen) {
+      case 'principal':  return Colors.blue;
+      case 'secundario': return Colors.green;
+      case 'compartida': return Colors.amber;
+      case 'practica':   return Colors.orange;
+      default:           return Colors.grey;
+    }
+  }
+
+  String _getOrigenTexto(String origen) {
+    switch (origen) {
+      case 'principal':  return 'Principal';
+      case 'secundario': return 'Secundario';
+      case 'compartida': return 'Compartida';
+      case 'practica':   return 'Practica';
+      default:           return origen;
+    }
+  }
+
+  // Guarda el plan en la BD y navega al inicio.
+  // Si [nombre] es null se guarda sin nombre personalizado.
+  Future<void> _guardarYSalir({String? nombre}) async {
+    if (_guardando) return;
+    setState(() => _guardando = true);
+
+    try {
+      await _apiService.guardarPlan(
+        token:              widget.token,
+        nombre:             nombre,
+        programaPrincipal:  widget.programaPrincipal?.codigo ?? '',
+        programaSecundario: widget.programaSecundario?.codigo,
+        semestresCursados:  widget.semestresCursados,
+        promedio:           widget.promedio,
+        materiasAprobadas:  widget.materiasAprobadas,
+        homologaciones:     widget.homologaciones,
+        planGenerado:       widget.planData,
+      );
+    } catch (e) {
+      // Si el guardado falla no bloqueamos la navegacion; solo notificamos.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo guardar el plan: $e'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    }
+
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PantallaSeleccion(
+            token:    widget.token,
+            userData: widget.userData,
+          ),
+        ),
+        (route) => false,
+      );
+    }
+  }
+
+  // Abre un dialogo para ingresar un nombre y luego guarda.
+  Future<void> _mostrarDialogoNombre() async {
+    final ctrl = TextEditingController();
+
+    final nombre = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
-          'Mi Planificación',
+          'Nombrar plan',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.tune_rounded),
-            onPressed: () {},
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Resumen — azul UTB
-          Container(
-            color: const Color(0xFF1A1FC8),
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-            child: Row(
-              children: [
-                _resumenItem('Semestres\nrestantes', '8'),
-                _dividerV(),
-                _resumenItem('Créditos\npendientes', '112'),
-                _dividerV(),
-                _resumenItem('Homologadas', '4'),
-                _dividerV(),
-                _resumenItem('Avance', '18%'),
-              ],
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ponle un nombre para identificarlo despues.',
+              style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
-          ),
-
-          // Barra de progreso global
-          Container(
-            color: const Color(0xFF1A1FC8),
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Progreso general',
-                    style: TextStyle(
-                        color: Color(0xFFADB5FF), fontSize: 12)),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: LinearProgressIndicator(
-                    value: 0.18,
-                    minHeight: 8,
-                    backgroundColor: const Color(0xFF2D33D4),
-                    valueColor: const AlwaysStoppedAnimation<Color>(
-                        Color(0xFF4ADE00)),
-                  ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: 60,
+              decoration: InputDecoration(
+                hintText: 'Ej. Plan 2026-2',
+                filled: true,
+                fillColor: const Color(0xFFF9FAFB),
+                counterText: '',
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
                 ),
-              ],
-            ),
-          ),
-
-          // Lista de semestres
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: semestres.length,
-              itemBuilder: (context, index) {
-                return _SemestreCard(semestre: semestres[index]);
-              },
-            ),
-          ),
-
-          // Botón agregar — cian UTB
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.add_rounded, color: Colors.black),
-                label: const Text(
-                  'Agregar materia al plan',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00D4FF),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  elevation: 0,
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide:
+                      const BorderSide(color: Color(0xFF1A1FC8), width: 2),
                 ),
               ),
             ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF6B7280))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final texto = ctrl.text.trim();
+              Navigator.pop(ctx, texto.isEmpty ? null : texto);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1A1FC8),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('Guardar'),
           ),
         ],
       ),
     );
-  }
 
-  Widget _resumenItem(String label, String valor) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(valor,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 2),
-          Text(label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  color: Color(0xFFADB5FF), fontSize: 10)),
-        ],
-      ),
-    );
-  }
+    // Si el usuario canceló el dialogo, no hacemos nada.
+    if (nombre == null && ctrl.text.trim().isEmpty) return;
 
-  Widget _dividerV() {
-    return Container(
-        height: 36,
-        width: 1,
-        color: Colors.white.withOpacity(0.25));
-  }
-}
-
-class _SemestreCard extends StatelessWidget {
-  final Map<String, dynamic> semestre;
-  const _SemestreCard({required this.semestre});
-
-  // Colores UTB según estado
-  Color get _estadoColor {
-    switch (semestre['estado']) {
-      case 'completado':
-        return const Color(0xFF4ADE00); // verde UTB
-      case 'en_curso':
-        return const Color(0xFF00D4FF); // cian UTB
-      default:
-        return const Color(0xFF1A1FC8); // azul UTB
-    }
-  }
-
-  Color get _estadoTextColor {
-    switch (semestre['estado']) {
-      case 'completado':
-        return Colors.black;
-      case 'en_curso':
-        return Colors.black;
-      default:
-        return Colors.white;
-    }
-  }
-
-  String get _estadoLabel {
-    switch (semestre['estado']) {
-      case 'completado':
-        return 'Completado';
-      case 'en_curso':
-        return 'En curso';
-      default:
-        return 'Planificado';
-    }
+    // Si presionó "Guardar" (con o sin nombre escrito), guardamos y salimos.
+    await _guardarYSalir(nombre: nombre);
   }
 
   @override
   Widget build(BuildContext context) {
-    final materias =
-        semestre['materias'] as List<Map<String, dynamic>>;
-    final totalCreditos = materias.fold<int>(
-        0, (sum, m) => sum + (m['creditos'] as int));
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(
-        children: [
-          // Header semestre
-          Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: _estadoColor.withOpacity(0.10),
-              borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(14)),
-            ),
+    // PopScope con canPop: false impide volver atras con gesto o boton del sistema.
+    // Desde esta pantalla solo se puede salir por los botones de la barra inferior,
+    // de esta manera evitamos que se pueda modificar el plan final.
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+      backgroundColor: const Color(0xFFF0F2FF),
+      drawer: DrawerMenu(token: widget.token, userData: widget.userData),
+      appBar: AppBar(
+        title: const Text('Plan de Estudios'),
+        backgroundColor: const Color(0xFF1A1FC8),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(50),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                const Text(
+                  'Semestres restantes:',
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                ),
                 Container(
-                  width: 36,
-                  height: 36,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: _estadoColor,
-                    borderRadius: BorderRadius.circular(10),
+                    color: const Color(0xFF4ADE00),
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Center(
-                    child: Text(
-                      '${semestre['numero']}',
-                      style: TextStyle(
-                          color: _estadoTextColor,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16),
+                  child: Text(
+                    '${widget.planResponse.totalSemestresFuturos}',
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              ],
+            ),
+          ),
+        ),
+      ),
+      // ── Barra inferior con dos botones ──────────────────────
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+        child: Row(
+          children: [
+            // Boton izquierdo: Nombrar plan (abre dialogo)
+            Expanded(
+              child: SizedBox(
+                height: 52,
+                child: OutlinedButton.icon(
+                  onPressed: _guardando ? null : _mostrarDialogoNombre,
+                  icon: const Icon(Icons.bookmark_outline_rounded,
+                      color: Color(0xFF1A1FC8)),
+                  label: const Text(
+                    'Nombrar plan',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF1A1FC8),
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(
+                        color: Color(0xFF1A1FC8), width: 1.5),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    backgroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Boton derecho: Ir al inicio (guarda sin nombre)
+            Expanded(
+              child: SizedBox(
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed:
+                      _guardando ? null : () => _guardarYSalir(nombre: null),
+                  icon: _guardando
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.black),
+                        )
+                      : const Icon(Icons.home_rounded, color: Colors.black),
+                  label: Text(
+                    _guardando ? 'Guardando...' : 'Ir al inicio',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4ADE00),
+                    disabledBackgroundColor:
+                        const Color(0xFF4ADE00).withOpacity(0.5),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: widget.planResponse.semestres.length,
+        itemBuilder: (context, index) {
+          final semestre = widget.planResponse.semestres[index];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header del semestre
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: semestre.esPrimero
+                        ? Colors.deepPurple.shade100
+                        : semestre.esUltimo
+                            ? Colors.orange.shade100
+                            : Colors.grey.shade100,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Semestre ${semestre['numero']}',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                            color: Color(0xFF1A1A2E)),
+                      Row(
+                        children: [
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: semestre.esUltimo
+                                  ? Colors.orange
+                                  : const Color(0xFF1A1FC8),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${semestre.numero}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 18,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Semestre ${semestre.numero}',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1A1A2E),
+                                ),
+                              ),
+                              if (semestre.esUltimo)
+                                const Text(
+                                  'Practica Profesional',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
                       ),
-                      Text(
-                        '$totalCreditos créditos · ${materias.length} materias',
-                        style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF6B7280)),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A1FC8),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${semestre.totalCreditos} creditos',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _estadoColor,
-                    borderRadius: BorderRadius.circular(20),
+                // Lista de materias
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: semestre.materias.map((materia) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: _getOrigenColor(materia.origen),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    materia.nombre,
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w500,
+                                      color: Color(0xFF1A1A2E),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        materia.codigo,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey.shade600,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        width: 4, height: 4,
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade400,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        '${materia.creditos} creditos',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        width: 4, height: 4,
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade400,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: _getOrigenColor(
+                                                  materia.origen)
+                                              .withOpacity(0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: Text(
+                                          _getOrigenTexto(materia.origen),
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            color: _getOrigenColor(
+                                                materia.origen),
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (materia.sirveParaAmbas)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade100,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: Colors.amber.shade300,
+                                      width: 0.5),
+                                ),
+                                child: const Text(
+                                  'Doble',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.amber,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
                   ),
-                  child: Text(_estadoLabel,
-                      style: TextStyle(
-                          color: _estadoTextColor,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600)),
                 ),
+                // Footer semestre de practica
+                if (semestre.esUltimo)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: const BorderRadius.only(
+                        bottomLeft: Radius.circular(16),
+                        bottomRight: Radius.circular(16),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.work_outline,
+                            size: 16, color: Colors.orange),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Semestre de practica profesional',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.orange),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '9 creditos',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
-          ),
-
-          // Materias
-          ...materias
-              .map((materia) => _MateriaItem(materia: materia)),
-        ],
+          );
+        },
       ),
-    );
-  }
-}
-
-class _MateriaItem extends StatelessWidget {
-  final Map<String, dynamic> materia;
-  const _MateriaItem({required this.materia});
-
-  // Colores UTB por estado de materia
-  Color get _color {
-    switch (materia['estado']) {
-      case 'aprobada':
-        return const Color(0xFF4ADE00);  // verde UTB
-      case 'cursando':
-        return const Color(0xFF00D4FF);  // cian UTB
-      case 'homologada':
-        return const Color(0xFF1A1FC8);  // azul UTB
-      default:
-        return const Color(0xFF9CA3AF);
-    }
-  }
-
-  IconData get _icono {
-    switch (materia['estado']) {
-      case 'aprobada':
-        return Icons.check_circle_rounded;
-      case 'cursando':
-        return Icons.radio_button_checked_rounded;
-      case 'homologada':
-        return Icons.swap_horiz_rounded;
-      default:
-        return Icons.circle_outlined;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
-      ),
-      child: Row(
-        children: [
-          Icon(_icono, color: _color, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              materia['nombre'] as String,
-              style: const TextStyle(
-                  fontSize: 14, color: Color(0xFF374151)),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              '${materia['creditos']} cr',
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF6B7280)),
-            ),
-          ),
-        ],
-      ),
-    );
+    ),  // Scaffold
+    );  // PopScope
   }
 }

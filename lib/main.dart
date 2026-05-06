@@ -1,29 +1,49 @@
+// ============================================================
+//  main.dart
+//  Punto de entrada de la app DuoProgram
+// ============================================================
+
 import 'package:flutter/material.dart';
-import 'screens/pantalla_planificacion.dart';
-import 'screens/pantalla_seleccion.dart';
 import 'screens/pantalla_inicio.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const DuoProgramApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class DuoProgramApp extends StatelessWidget {
+  const DuoProgramApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'DuoProgram',
       debugShowCheckedModeBanner: false,
-      title: 'Aplicación Flutter',
       theme: ThemeData(
-        textTheme: GoogleFonts.interTextTheme(),
+        fontFamily: 'Roboto',
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1A1FC8),
+          primary: const Color(0xFF1A1FC8),
+        ),
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: true,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
       ),
-
-      //home: PantallaInicio(), //Nombre de la clase dentro de pantalla_inicio.dart
-      //home: PantallaSeleccion(),
-      home: PantallaPlanificacion(),
+      home: const PantallaInicio(),
     );
   }
 }
