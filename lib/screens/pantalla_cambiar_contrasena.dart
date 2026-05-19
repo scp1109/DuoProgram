@@ -1,44 +1,49 @@
+// ============================================================
+//  pantalla_cambiar_contrasena.dart
+//  Permite al usuario cambiar su contrasena desde Mi Perfil
+// ============================================================
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
 
-class PantallaCambiarPassword extends StatefulWidget {
+class PantallaCambiarContrasena extends StatefulWidget {
   final String token;
 
-  const PantallaCambiarPassword({super.key, required this.token});
+  const PantallaCambiarContrasena({super.key, required this.token});
 
   @override
-  State<PantallaCambiarPassword> createState() => _PantallaCambiarPasswordState();
+  State<PantallaCambiarContrasena> createState() => _PantallaCambiarContrasenaState();
 }
 
-class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
+class _PantallaCambiarContrasenaState extends State<PantallaCambiarContrasena> {
   final _formKey = GlobalKey<FormState>();
-  final _passwordActualController = TextEditingController();
-  final _passwordNuevaController = TextEditingController();
-  final _confirmarPasswordController = TextEditingController();
-  final ApiService _apiService = ApiService();
-  bool _isLoading = false;
-  bool _obscureActual = true;
-  bool _obscureNueva = true;
-  bool _obscureConfirmar = true;
+  final _contrasenaActualController = TextEditingController();
+  final _contrasenaNuevaController = TextEditingController();
+  final _confirmarContrasenaController = TextEditingController();
+  final ServicioApi _servicioApi = ServicioApi();
+  bool _cargando = false;
+  bool _ocultarActual = true;
+  bool _ocultarNueva = true;
+  bool _ocultarConfirmar = true;
 
   @override
   void dispose() {
-    _passwordActualController.dispose();
-    _passwordNuevaController.dispose();
-    _confirmarPasswordController.dispose();
+    _contrasenaActualController.dispose();
+    _contrasenaNuevaController.dispose();
+    _confirmarContrasenaController.dispose();
     super.dispose();
   }
 
-  Future<void> _cambiarPassword() async {
+  Future<void> _cambiarContrasena() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+    setState(() => _cargando = true);
 
     try {
-      await _apiService.cambiarPassword(
+      await _servicioApi.cambiarContrasena(
         widget.token,
-        oldPassword: _passwordActualController.text,
-        newPassword: _passwordNuevaController.text,
+        contrasenaActual: _contrasenaActualController.text,
+        contrasenaNueva: _contrasenaNuevaController.text,
       );
       
       if (mounted) {
@@ -47,6 +52,8 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
         );
         Navigator.pop(context, true);
       }
+    } on SesionExpiradaException {
+      if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -54,7 +61,7 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _cargando = false);
     }
   }
 
@@ -85,14 +92,14 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
                 child: Column(
                   children: [
                     TextFormField(
-                      controller: _passwordActualController,
-                      obscureText: _obscureActual,
+                      controller: _contrasenaActualController,
+                      obscureText: _ocultarActual,
                       decoration: InputDecoration(
                         labelText: 'Contraseña actual',
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
-                          icon: Icon(_obscureActual ? Icons.visibility_off : Icons.visibility),
-                          onPressed: () => setState(() => _obscureActual = !_obscureActual),
+                          icon: Icon(_ocultarActual ? Icons.visibility_off : Icons.visibility),
+                          onPressed: () => setState(() => _ocultarActual = !_ocultarActual),
                         ),
                         border: const OutlineInputBorder(),
                       ),
@@ -105,14 +112,14 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
-                      controller: _passwordNuevaController,
-                      obscureText: _obscureNueva,
+                      controller: _contrasenaNuevaController,
+                      obscureText: _ocultarNueva,
                       decoration: InputDecoration(
                         labelText: 'Contraseña nueva',
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
-                          icon: Icon(_obscureNueva ? Icons.visibility_off : Icons.visibility),
-                          onPressed: () => setState(() => _obscureNueva = !_obscureNueva),
+                          icon: Icon(_ocultarNueva ? Icons.visibility_off : Icons.visibility),
+                          onPressed: () => setState(() => _ocultarNueva = !_ocultarNueva),
                         ),
                         border: const OutlineInputBorder(),
                       ),
@@ -120,22 +127,22 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
                         if (value == null || value.isEmpty) {
                           return 'Ingresa una nueva contraseña';
                         }
-                        if (value.length < 6) {
-                          return 'La contraseña debe tener al menos 6 caracteres';
+                        if (value.length < 8) {
+                          return 'La contraseña debe tener al menos 8 caracteres';
                         }
                         return null;
                       },
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
-                      controller: _confirmarPasswordController,
-                      obscureText: _obscureConfirmar,
+                      controller: _confirmarContrasenaController,
+                      obscureText: _ocultarConfirmar,
                       decoration: InputDecoration(
                         labelText: 'Confirmar nueva contraseña',
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
-                          icon: Icon(_obscureConfirmar ? Icons.visibility_off : Icons.visibility),
-                          onPressed: () => setState(() => _obscureConfirmar = !_obscureConfirmar),
+                          icon: Icon(_ocultarConfirmar ? Icons.visibility_off : Icons.visibility),
+                          onPressed: () => setState(() => _ocultarConfirmar = !_ocultarConfirmar),
                         ),
                         border: const OutlineInputBorder(),
                       ),
@@ -143,7 +150,7 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
                         if (value == null || value.isEmpty) {
                           return 'Confirma tu nueva contraseña';
                         }
-                        if (value != _passwordNuevaController.text) {
+                        if (value != _contrasenaNuevaController.text) {
                           return 'Las contraseñas no coinciden';
                         }
                         return null;
@@ -157,14 +164,14 @@ class _PantallaCambiarPasswordState extends State<PantallaCambiarPassword> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _cambiarPassword,
+                  onPressed: _cargando ? null : _cambiarContrasena,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1A1FC8),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: _isLoading
+                  child: _cargando
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text('Cambiar contraseña', style: TextStyle(fontSize: 16, color: Colors.white)),
                 ),

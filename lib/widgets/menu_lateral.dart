@@ -1,32 +1,153 @@
 // ============================================================
-//  widgets/drawer_menu.dart
+//  widgets/menu_lateral.dart
 //  Menú lateral disponible en toda la app
 // ============================================================
 
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/pantalla_perfil.dart';
 import '../screens/pantalla_mis_planes.dart';
 import '../screens/pantalla_seleccion.dart';
-import '../screens/pantalla_inicio.dart';
+import '../utils/sesion_helper.dart';
 
-class DrawerMenu extends StatelessWidget {
+// Este widget crea el menu lateral que aparece en varias pantallas de la app.
+// Es StatefulWidget porque necesita cargar la foto guardada del usuario.
+class MenuLateral extends StatefulWidget {
+  // Token del usuario logueado. Sirve para abrir pantallas que necesitan sesion.
   final String token;
-  final Map<String, dynamic> userData;
 
-  const DrawerMenu({
+  // Datos basicos del usuario: id, nombre, correo y posiblemente foto_url.
+  final Map<String, dynamic> datosUsuario;
+
+  const MenuLateral({
     super.key,
     required this.token,
-    required this.userData,
+    required this.datosUsuario,
   });
 
   @override
+  State<MenuLateral> createState() => _MenuLateralState();
+}
+
+class _MenuLateralState extends State<MenuLateral> {
+  // Ruta local de la foto en celular/escritorio.
+  // Se guarda cuando el usuario elige una imagen desde Mi Perfil.
+  String? _fotoPath;
+
+  // Bytes de la foto cuando la app corre en web.
+  // En web no se usa Image.file, por eso se guarda la imagen en memoria.
+  Uint8List? _fotoBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    // Al abrir el drawer, se intenta cargar la foto guardada.
+    _cargarFotoGuardada();
+  }
+
+  @override
+  void didUpdateWidget(covariant MenuLateral widgetAnterior) {
+    super.didUpdateWidget(widgetAnterior);
+    // Si cambian los datos del usuario, se vuelve a buscar la foto correcta.
+    _cargarFotoGuardada();
+  }
+
+  // Busca la foto del usuario en SharedPreferences.
+  // Usa una clave distinta para web y para movil/escritorio.
+  Future<void> _cargarFotoGuardada() async {
+    // El id permite que cada usuario tenga su propia foto guardada.
+    final userId = widget.datosUsuario['id'];
+    if (userId == null) {
+      if (!mounted) return;
+      setState(() {
+        _fotoPath = null;
+        _fotoBytes = null;
+      });
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+
+    if (kIsWeb) { // kIsWeb: constante de Flutter que indica si la app está corriendo en navegador web
+      // En web la foto se guardo como texto base64.
+      final base64Str = prefs.getString('foto_perfil_web_$userId');
+      if (!mounted) return;
+      setState(() {
+        // Si existe una foto, se convierte de base64 a bytes para mostrarla.
+        _fotoBytes = base64Str != null ? base64Decode(base64Str) : null;
+        _fotoPath = null;
+      });
+    } else {
+      // En celular/escritorio se guarda la ruta del archivo.
+      final fotoGuardada = prefs.getString('foto_perfil_$userId');
+      // Antes de mostrarla se revisa que el archivo exista.
+      final existe = fotoGuardada != null && File(fotoGuardada).existsSync();
+      if (!mounted) return;
+      setState(() {
+        _fotoPath = existe ? fotoGuardada : null;
+        _fotoBytes = null;
+      });
+    }
+  }
+
+  // Avatar por defecto cuando el usuario no tiene foto o la foto falla.
+  Widget _avatarFallback() {
+    return Container(
+      color: const Color(0xFF00D4FF),
+      child: const Icon(
+        Icons.person,
+        size: 40,
+        color: Colors.white,
+      ),
+    );
+  }
+
+  // Decide que imagen mostrar en el circulo del drawer.
+  // Prioridad: foto web, foto local, foto del servidor y por ultimo icono default.
+  Widget _avatarImagen() {
+    // foto_url seria una imagen remota si algun dia viene desde el backend.
+    final fotoUrl = widget.datosUsuario['foto_url'];
+
+    // Caso web: se muestra desde bytes guardados.
+    if (_fotoBytes != null) {
+      return Image.memory(_fotoBytes!, fit: BoxFit.cover);
+    }
+
+    // Caso movil/escritorio: se muestra desde una ruta local.
+    if (_fotoPath != null) {
+      return Image.file(
+        File(_fotoPath!),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _avatarFallback(),
+      );
+    }
+
+    // Caso servidor: se muestra una URL si existe en los datos del usuario.
+    if (fotoUrl is String && fotoUrl.isNotEmpty) {
+      return Image.network(
+        fotoUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _avatarFallback(),
+      );
+    }
+
+    // Si no hay ninguna foto disponible, se muestra el icono normal.
+    return _avatarFallback();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Drawer es el panel lateral que se abre desde el menu hamburguesa.
     return Drawer(
       child: Container(
         color: const Color(0xFF1A1FC8),
         child: Column(
           children: [
-            // Header del drawer
+            // Header del drawer: muestra foto, nombre y correo del usuario.
             Container(
               padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
               decoration: const BoxDecoration(
@@ -34,7 +155,7 @@ class DrawerMenu extends StatelessWidget {
               ),
               child: Column(
                 children: [
-                  // Avatar
+                  // Avatar circular del usuario.
                   Container(
                     width: 80,
                     height: 80,
@@ -43,40 +164,18 @@ class DrawerMenu extends StatelessWidget {
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.2),
+                          color: Colors.black.withValues(alpha: 0.2),
                           blurRadius: 10,
                         ),
                       ],
                     ),
                     child: ClipOval(
-                      child: userData['foto_url'] != null
-                          ? Image.network(
-                              userData['foto_url'],
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return Container(
-                                  color: const Color(0xFF00D4FF),
-                                  child: const Icon(
-                                    Icons.person,
-                                    size: 40,
-                                    color: Colors.white,
-                                  ),
-                                );
-                              },
-                            )
-                          : Container(
-                              color: const Color(0xFF00D4FF),
-                              child: const Icon(
-                                Icons.person,
-                                size: 40,
-                                color: Colors.white,
-                              ),
-                            ),
+                      child: _avatarImagen(),
                     ),
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    userData['nombre_completo'] ?? 'Usuario',
+                    widget.datosUsuario['nombre_completo'] ?? 'Usuario',
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -85,7 +184,7 @@ class DrawerMenu extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    userData['email'] ?? 'usuario@utb.edu.co',
+                    widget.datosUsuario['email'] ?? 'usuario@utb.edu.co',
                     style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFFADB5FF),
@@ -109,8 +208,8 @@ class DrawerMenu extends StatelessWidget {
                         context,
                         MaterialPageRoute(
                           builder: (_) => PantallaSeleccion(
-                            token: token,
-                            userData: userData,
+                            token: widget.token,
+                            datosUsuario: widget.datosUsuario,
                           ),
                         ),
                         (route) => false,
@@ -126,8 +225,8 @@ class DrawerMenu extends StatelessWidget {
                         context,
                         MaterialPageRoute(
                           builder: (_) => PantallaPerfil(
-                            token: token,
-                            userData: userData,
+                            token: widget.token,
+                            datosUsuario: widget.datosUsuario,
                           ),
                         ),
                       );
@@ -141,7 +240,7 @@ class DrawerMenu extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => PantallaMisPlanes(token: token),
+                          builder: (_) => PantallaMisPlanes(token: widget.token),
                         ),
                       );
                     },
@@ -217,13 +316,9 @@ class DrawerMenu extends StatelessWidget {
             child: const Text('Cancelar'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const PantallaInicio()),
-                (route) => false,
-              );
+              await SesionHelper.cerrarSesion(context);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,

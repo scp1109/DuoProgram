@@ -1,14 +1,15 @@
 // ============================================================
 //  datos_programa.dart
 //  Mallas curriculares UTB — Malla 201910
-//  Ingeniería de Sistemas y Computación (55 materias, 162 cr)
-//  Ingeniería Industrial (58 materias, 169 cr)
 // ============================================================
 
 
 // ─── Homologaciones externas ─────────────────────────────────
 class HomologacionExterna {
+  // Codigo de la materia que el estudiante quiere marcar como homologada.
   final String codigoMateria;
+
+  // Nombre del programa o lugar desde donde se homologa esa materia.
   final String nombrePrograma;
 
   const HomologacionExterna({
@@ -19,6 +20,8 @@ class HomologacionExterna {
 
 // ─── Códigos de las materias de inglés ──────────────────────
 final List<String> codigosIngles = [
+  // La posicion en la lista representa el nivel de ingles.
+  // Ejemplo: posicion 0 = nivel 1, posicion 1 = nivel 2, etc.
   "CHUL_LE1A",
   "CHUL_LE2A",
   "CHUL_LE3A",
@@ -28,10 +31,19 @@ final List<String> codigosIngles = [
 
 // ── Modelo de Materia ────────────────────────────────────────
 class Materia {
+  // Codigo unico de la materia, por ejemplo CBAS_M01A.
   final String codigo;
+
+  // Nombre que se muestra en pantalla.
   final String nombre;
+
+  // Cantidad de creditos academicos de la materia.
   final int creditos;
+
+  // Nivel o semestre sugerido dentro de la malla.
   final int nivel;
+
+  // Lista de codigos de materias que deben aprobarse antes.
   final List<String> prerrequisitos;
 
   const Materia({
@@ -42,7 +54,8 @@ class Materia {
     this.prerrequisitos = const [],
   });
 
-  // Construye una Materia desde el JSON que devuelve GET /programas/{codigo}
+  // Convierte una materia que viene del backend en un objeto Materia de Dart.
+  // Esto se usa cuando la app recibe la malla desde la BD por medio de la API.
   factory Materia.fromJson(Map<String, dynamic> json) {
     return Materia(
       codigo:         json['codigo']  as String,
@@ -60,8 +73,13 @@ class Materia {
 // Complementaria I") que el estudiante debe cubrir eligiendo
 // UNA de las opciones listadas.
 class GrupoElectiva {
+  // Codigo del espacio de electiva en la malla.
   final String slotCodigo;
+
+  // Nombre del espacio de electiva que se muestra al usuario.
   final String slotNombre;
+
+  // Materias que pueden servir para cubrir este espacio de electiva.
   final List<Materia> opciones;
 
   const GrupoElectiva({
@@ -70,33 +88,48 @@ class GrupoElectiva {
     required this.opciones,
   });
 
-  // Construye un GrupoElectiva desde el JSON que devuelve GET /programas/{codigo}.
-  // El backend devuelve un grupo por tipo (ej. HUMANIDADES con 2 slots);
-  // aqui se expande en un GrupoElectiva por slot para mantener compatibilidad.
+  // Convierte los grupos de electivas que vienen del backend.
+  // El backend puede mandar un grupo con varios slots, entonces aqui se crea
+  // un GrupoElectiva por cada slot para que la app pueda mostrarlos facil.
   static List<GrupoElectiva> fromJsonList(List<dynamic> jsonList) {
-    final List<GrupoElectiva> result = [];
+    // Aqui se van guardando todos los grupos ya convertidos.
+    final List<GrupoElectiva> resultado = [];
+
+    // Recorre cada grupo que llega desde la API.
     for (final g in jsonList) {
+      // Convierte las opciones de electiva en objetos Materia.
       final opciones = (g['opciones'] as List)
           .map((o) => Materia.fromJson(o as Map<String, dynamic>))
           .toList();
+
+      // Crea un grupo por cada slot de electiva.
       for (final slot in (g['slot_codigos'] as List)) {
-        result.add(GrupoElectiva(
+        resultado.add(GrupoElectiva(
           slotCodigo: slot as String,
           slotNombre: g['nombre'] as String,
           opciones:   opciones,
         ));
       }
     }
-    return result;
+    return resultado;
   }
 }
 
 // ── Modelo de Programa ───────────────────────────────────────
 class Programa {
+  // Codigo del programa, por ejemplo ISCO o IIND.
   final String codigo;
+
+  // Nombre completo del programa.
   final String nombre;
+
+  // Facultad a la que pertenece el programa.
   final String facultad;
+
+  // Materias obligatorias o slots que forman la malla del programa.
   final List<Materia> materias;
+
+  // Grupos de electivas con sus posibles materias.
   final List<GrupoElectiva> gruposElectivas;
 
   const Programa({
@@ -107,7 +140,8 @@ class Programa {
     this.gruposElectivas = const [],
   });
 
-  // Construye un Programa desde el JSON que devuelve GET /programas/{codigo}
+  // Convierte el detalle de un programa que viene del backend en un Programa.
+  // Esta es la parte que permite que Flutter use los datos de la BD.
   factory Programa.fromJson(Map<String, dynamic> json) {
     return Programa(
       codigo:          json['codigo']   as String,
@@ -121,16 +155,21 @@ class Programa {
     );
   }
 
+  // Suma los creditos de todas las materias del programa.
   int get totalCreditos =>
       materias.fold(0, (sum, m) => sum + m.creditos);
 }
 
 // ════════════════════════════════════════════════════════════
 //  ELECTIVAS COMPARTIDAS ENTRE AMBOS PROGRAMAS
-//  (mismo código → motor las detecta como compartidas)
+//  (mismo código -> motor las detecta como compartidas)
 // ════════════════════════════════════════════════════════════
 
 // ── Electivas de Humanidades (idénticas en ambos programas) ─
+/*
+Se obtienen las mallas desde el backend/BD.
+Se conservan comentados como referencia.
+
 const _electivasHumanidades = [
   Materia(codigo: 'CHUM_A01A', nombre: 'Apreciación del Arte',           creditos: 2, nivel: 0),
   Materia(codigo: 'CHUM_A02A', nombre: 'Apreciación Musical',            creditos: 2, nivel: 0),
@@ -1120,3 +1159,4 @@ const Set<String> materiasCompartidas = {
   'CHUM_C07A', 'CHUM_C17A', 'CHUM_F01A', 'CHUM_L01A', 'CHUM_L04A',
   'CHUM_L06A', 'CHUM_L07A', 'CHUM_L09A', 'CHUM_S04A',
 };
+*/

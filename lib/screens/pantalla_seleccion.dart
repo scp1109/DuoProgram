@@ -6,10 +6,10 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import '../services/servicio_api.dart';
 import '../data/datos_programa.dart';
 import 'pantalla_historial.dart';
-import '../widgets/drawer_menu.dart';
+import '../widgets/menu_lateral.dart';
 
 const Map<String, Map<String, dynamic>> _metadatosUI = {
   'ISCO': {
@@ -17,12 +17,8 @@ const Map<String, Map<String, dynamic>> _metadatosUI = {
     'color': Color(0xFF1A1FC8),
   },
   'IIND': {
-    'icono': Icons.precision_manufacturing_rounded,
-    'color': Color(0xFF00D4FF),
-  },
-  'AEMP': {
     'icono': Icons.business_center_rounded,
-    'color': Color(0xFF4ADE00),
+    'color': Color(0xFF00D4FF),
   },
   'IMEC': {
     'icono': Icons.settings_rounded,
@@ -30,18 +26,18 @@ const Map<String, Map<String, dynamic>> _metadatosUI = {
   },
   'CDAT': {
     'icono': Icons.bar_chart_rounded,
-    'color': Color(0xFF00D4FF),
+    'color': Color(0xFFEA580C),
   },
 };
 
 class PantallaSeleccion extends StatefulWidget {
   final String? token;
-  final Map<String, dynamic>? userData;
+  final Map<String, dynamic>? datosUsuario;
 
   const PantallaSeleccion({
     super.key,
     this.token,
-    this.userData,
+    this.datosUsuario,
   });
 
   @override
@@ -49,9 +45,9 @@ class PantallaSeleccion extends StatefulWidget {
 }
 
 class _PantallaSeleccionState extends State<PantallaSeleccion> {
-  final ApiService _apiService = ApiService();
+  final ServicioApi _servicioApi = ServicioApi();
   List<Map<String, dynamic>> _programas = [];
-  bool _isLoading = true;
+  bool _cargando = true;
   String? _error;
   
   Programa? _programa1;
@@ -82,26 +78,26 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
 
   Future<void> _cargarProgramas() async {
     setState(() {
-      _isLoading = true;
+      _cargando = true;
       _error = null;
     });
 
     try {
-      final programas = await _apiService.getProgramas();
+      final programas = await _servicioApi.obtenerProgramas();
       setState(() {
         _programas = programas;
-        _isLoading = false;
+        _cargando = false;
       });
     } catch (e) {
       setState(() {
         _error = e.toString();
-        _isLoading = false;
+        _cargando = false;
       });
     }
   }
 
   // Selecciona o deselecciona un programa. Llama al backend para obtener
-  // la malla completa antes de asignarlo, por eso es async.
+  // la malla completa antes de asignarlo.
   Future<void> _seleccionarPrograma(Map<String, dynamic> data) async {
     final codigo = data['codigo'] as String;
 
@@ -130,12 +126,12 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
     }
   }
 
-  // Obtiene la malla completa del programa desde el backend (BD).
+  // Obtiene la malla completa del programa desde el backend.
   // Antes buscaba en programasDisponibles de datos_programa.dart (local).
   Future<Programa> _fetchPrograma(Map<String, dynamic> data) async {
     final codigo = data['codigo'] as String;
     try {
-      final detalle = await _apiService.getProgramaDetalle(codigo);
+      final detalle = await _servicioApi.obtenerDetallePrograma(codigo);
       return Programa.fromJson(detalle);
     } catch (e) {
       print('[ERROR] No se pudo cargar malla de $codigo desde BD: $e');
@@ -178,7 +174,7 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
           programa: _programa1!,
           programaSecundario: _programa2!,
           token: widget.token ?? '',
-          userData: widget.userData ?? {},  
+          datosUsuario: widget.datosUsuario ?? {},  
         ),
       ),
     );
@@ -188,9 +184,9 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
 Widget build(BuildContext context) {
   return Scaffold(
     backgroundColor: const Color(0xFFF0F2FF),
-    drawer: DrawerMenu(
+    drawer: MenuLateral(
       token: widget.token ?? '',
-      userData: widget.userData ?? {},
+      datosUsuario: widget.datosUsuario ?? {},
     ), 
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A1FC8),
@@ -201,7 +197,7 @@ Widget build(BuildContext context) {
           style: TextStyle(fontWeight: FontWeight.bold),
         )
       ),
-      body: _isLoading
+      body: _cargando
           ? const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -394,11 +390,14 @@ Widget build(BuildContext context) {
                               {'icono': Icons.school_rounded, 'color': const Color(0xFF1A1FC8)};
                           
                           final int creditos = _parseInt(programa['total_creditos']);
+                          // total_semestres viene del backend; antes estaba
+                          // hardcodeado como 10 para todos los programas
+                          final int semestres = _parseInt(programa['total_semestres']);
                           
                           return _ProgramaCard(
                             nombre: programa['nombre'],
                             facultad: programa['facultad'],
-                            semestres: 10,
+                            semestres: semestres,
                             creditos: creditos,
                             icono: ui['icono'] as IconData,
                             color: ui['color'] as Color,
@@ -519,7 +518,7 @@ class _ProgramaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool seleccionado = estado > 0;
-    final String etiqueta = estado == 1 ? 'Programa 1' : 'Programa 2';
+    final String etiqueta = estado == 1 ? 'P. Principal' : 'P. Secundario';
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),

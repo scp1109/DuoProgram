@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
 
 class PantallaEditarPerfil extends StatefulWidget {
   final String token;
-  final Map<String, dynamic> userData;
+  final Map<String, dynamic> datosUsuario;
 
   const PantallaEditarPerfil({
     super.key,
     required this.token,
-    required this.userData,
+    required this.datosUsuario,
   });
 
   @override
@@ -18,34 +19,34 @@ class PantallaEditarPerfil extends StatefulWidget {
 class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
   final _formKey = GlobalKey<FormState>();
   final _nombreController = TextEditingController();
-  final _emailController = TextEditingController();
-  final ApiService _apiService = ApiService();
-  bool _isLoading = false;
+  final _correoController = TextEditingController();
+  final ServicioApi _servicioApi = ServicioApi();
+  bool _cargando = false;
 
   @override
   void initState() {
     super.initState();
-    _nombreController.text = widget.userData['nombre_completo'] ?? '';
-    _emailController.text = widget.userData['email'] ?? '';
+    _nombreController.text = widget.datosUsuario['nombre_completo'] ?? '';
+    _correoController.text = widget.datosUsuario['email'] ?? '';
   }
 
   @override
   void dispose() {
     _nombreController.dispose();
-    _emailController.dispose();
+    _correoController.dispose();
     super.dispose();
   }
 
   Future<void> _guardarCambios() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+    setState(() => _cargando = true);
 
     try {
-      await _apiService.actualizarPerfil(
+      await _servicioApi.actualizarPerfil(
         widget.token,
         nombreCompleto: _nombreController.text.trim(),
-        email: _emailController.text.trim(),
+        correo: _correoController.text.trim(),
       );
       
       if (mounted) {
@@ -54,6 +55,8 @@ class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
         );
         Navigator.pop(context, true);
       }
+    } on SesionExpiradaException {
+      if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -61,7 +64,7 @@ class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _cargando = false);
     }
   }
 
@@ -107,7 +110,7 @@ class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
-                      controller: _emailController,
+                      controller: _correoController,
                       keyboardType: TextInputType.emailAddress,
                       decoration: const InputDecoration(
                         labelText: 'Correo electrónico',
@@ -132,14 +135,14 @@ class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _guardarCambios,
+                  onPressed: _cargando ? null : _guardarCambios,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1A1FC8),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: _isLoading
+                  child: _cargando
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text('Guardar cambios', style: TextStyle(fontSize: 16, color: Colors.white))
                 ),

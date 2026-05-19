@@ -7,10 +7,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // kIsWeb
-import '../services/api_service.dart';
-import 'pantalla_inicio.dart';
+import 'dart:convert'; // base64
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
 import 'pantalla_editar_perfil.dart';
-import 'pantalla_cambiar_password.dart';
+import 'pantalla_cambiar_contrasena.dart';
 import 'pantalla_mis_planes.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,12 +19,12 @@ import 'dart:io';
 
 class PantallaPerfil extends StatefulWidget {
   final String token;
-  final Map<String, dynamic> userData;
+  final Map<String, dynamic> datosUsuario;
 
   const PantallaPerfil({
     super.key,
     required this.token,
-    required this.userData,
+    required this.datosUsuario,
   });
 
   @override
@@ -31,43 +32,54 @@ class PantallaPerfil extends StatefulWidget {
 }
 
 class _PantallaPerfilState extends State<PantallaPerfil> {
-  final ApiService _apiService = ApiService();
-  late Map<String, dynamic> _userData;
+  final ServicioApi _servicioApi = ServicioApi();
+  late Map<String, dynamic> _datosUsuario;
   String? _fotoPath;      // ruta local (movil/desktop)
   Uint8List? _fotoBytes;  // bytes en memoria (web, Image.file no soportado)
   List<dynamic> _historial = [];
-  bool _isLoading = true;
-  bool _isLoadingHistorial = true;
+  bool _cargando = true;
+  bool _cargandoHistorial = true;
   List<dynamic> _planesGuardados = [];
-  bool _isLoadingPlanes = true;
+  bool _cargandoPlanes = true;
 
   @override
   void initState() {
     super.initState();
-    _userData = widget.userData;
+    _datosUsuario = widget.datosUsuario;
     _cargarFotoGuardada();
     _cargarDatosCompletos();
   }
 
-  // Carga la ruta de foto guardada en SharedPreferences al abrir el perfil
+  // Carga la foto guardada en SharedPreferences al abrir el perfil
   Future<void> _cargarFotoGuardada() async {
     final prefs = await SharedPreferences.getInstance();
-    final fotoGuardada = prefs.getString('foto_perfil_${_userData['id']}');
-    if (fotoGuardada != null && File(fotoGuardada).existsSync()) {
-      setState(() => _fotoPath = fotoGuardada);
+    if (kIsWeb) {
+      // En web se guarda como base64 porque Image.file no existe
+      final base64Str = prefs.getString('foto_perfil_web_${_datosUsuario['id']}');
+      if (base64Str != null) {
+        setState(() => _fotoBytes = base64Decode(base64Str));
+      }
+    } else {
+      // En movil/desktop se guarda la ruta del archivo
+      final fotoGuardada = prefs.getString('foto_perfil_${_datosUsuario['id']}');
+      if (fotoGuardada != null && File(fotoGuardada).existsSync()) {
+        setState(() => _fotoPath = fotoGuardada);
+      }
     }
   }
 
   Future<void> _cargarPlanesGuardados() async {
-  setState(() => _isLoadingPlanes = true);
+  setState(() => _cargandoPlanes = true);
   try {
-    final planes = await _apiService.getMisPlanes(widget.token);
+    final planes = await _servicioApi.obtenerMisPlanes(widget.token);
     setState(() {
       _planesGuardados = planes;
-      _isLoadingPlanes = false;
+      _cargandoPlanes = false;
     });
+  } on SesionExpiradaException {
+    if (mounted) await SesionHelper.manejarSesionExpirada(context);
   } catch (e) {
-    setState(() => _isLoadingPlanes = false);
+    setState(() => _cargandoPlanes = false);
     print('Error cargando planes: $e');
     }
   }
@@ -78,30 +90,34 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
       _cargarHistorial(),
       _cargarPlanesGuardados(),
     ]);
-    setState(() => _isLoading = false);
+    setState(() => _cargando = false);
   }
 
   Future<void> _cargarPerfil() async {
     try {
-      final perfil = await _apiService.getPerfil(widget.token);
+      final perfil = await _servicioApi.obtenerPerfil(widget.token);
       setState(() {
-        _userData = perfil;
+        _datosUsuario = perfil;
       });
+    } on SesionExpiradaException {
+      if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
       print('Error cargando perfil: $e');
     }
   }
 
   Future<void> _cargarHistorial() async {
-    setState(() => _isLoadingHistorial = true);
+    setState(() => _cargandoHistorial = true);
     try {
-      final historial = await _apiService.getHistorial(widget.token);
+      final historial = await _servicioApi.obtenerHistorial(widget.token);
       setState(() {
         _historial = historial;
-        _isLoadingHistorial = false;
+        _cargandoHistorial = false;
       });
+    } on SesionExpiradaException {
+      if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
-      setState(() => _isLoadingHistorial = false);
+      setState(() => _cargandoHistorial = false);
       print('Error cargando historial: $e');
     }
   }
@@ -119,13 +135,9 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
             child: const Text('Cancelar'),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const PantallaInicio()),
-                (route) => false,
-              );
+              await SesionHelper.cerrarSesion(context);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
@@ -139,28 +151,29 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   }
 
   void _editarPerfil() async {
-    final result = await Navigator.push(
+    final resultado = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PantallaEditarPerfil(
           token: widget.token,
-          userData: _userData,
+          datosUsuario: _datosUsuario,
         ),
       ),
     );
-    if (result == true) {
+    if (resultado == true) {
       _cargarPerfil();
+      _cargarHistorial(); // refrescar historial para mostrar la accion recien registrada
     }
   }
 
-  void _cambiarPassword() async {
-    final result = await Navigator.push(
+  void _cambiarContrasena() async {
+    final resultado = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PantallaCambiarPassword(token: widget.token),
+        builder: (_) => PantallaCambiarContrasena(token: widget.token),
       ),
     );
-    if (result == true) {
+    if (resultado == true) {
       _mostrarSnackbar('Contraseña actualizada correctamente', isError: false);
     }
   }
@@ -200,7 +213,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
           ),
         ],
       ),
-      body: _isLoading
+      body: _cargando
           ? const Center(
               child: CircularProgressIndicator(color: Color(0xFF1A1FC8)),
             )
@@ -247,10 +260,10 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                                       : _fotoPath != null
                                           // Movil/desktop: archivo local
                                           ? Image.file(File(_fotoPath!), fit: BoxFit.cover)
-                                          : _userData['foto_url'] != null
+                                          : _datosUsuario['foto_url'] != null
                                               // Foto remota del servidor
                                               ? Image.network(
-                                                  _userData['foto_url'],
+                                                  _datosUsuario['foto_url'],
                                                   fit: BoxFit.cover,
                                                   errorBuilder: (_, __, ___) => Container(
                                                     color: const Color(0xFF00D4FF),
@@ -287,7 +300,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            _userData['nombre_completo'] ?? 'Usuario',
+                            _datosUsuario['nombre_completo'] ?? 'Usuario',
                             style: const TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.bold,
@@ -296,7 +309,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            _userData['email'] ?? 'usuario@utb.edu.co',
+                            _datosUsuario['email'] ?? 'usuario@utb.edu.co',
                             style: const TextStyle(
                               fontSize: 14,
                               color: Color(0xFFADB5FF),
@@ -313,7 +326,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Text(
-                              'Miembro desde ${_formatearFecha(_userData['created_at'])}',
+                              'Miembro desde ${_formatearFecha(_datosUsuario['created_at'])}',
                               style: const TextStyle(
                                 fontSize: 12,
                                 color: Colors.white,
@@ -343,7 +356,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                               icon: Icons.lock_rounded,
                               label: 'Cambiar contraseña',
                               color: const Color(0xFF00D4FF),
-                              onTap: _cambiarPassword,
+                              onTap: _cambiarContrasena,
                             ),
                           ),
                         ],
@@ -382,24 +395,24 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                           _buildInfoRow(
                             icon: Icons.person_outline,
                             label: 'Nombre completo',
-                            value: _userData['nombre_completo'] ?? 'No especificado',
+                            value: _datosUsuario['nombre_completo'] ?? 'No especificado',
                             onTap: _editarPerfil,
                           ),
                           _buildInfoRow(
                             icon: Icons.email_outlined,
                             label: 'Correo electrónico',
-                            value: _userData['email'] ?? 'No especificado',
+                            value: _datosUsuario['email'] ?? 'No especificado',
                             onTap: _editarPerfil,
                           ),
                           _buildInfoRow(
                             icon: Icons.calendar_today_rounded,
                             label: 'Fecha de registro',
-                            value: _formatearFecha(_userData['created_at']),
+                            value: _formatearFecha(_datosUsuario['created_at']),
                           ),
                           _buildInfoRow(
                             icon: Icons.school_rounded,
                             label: 'Planes guardados',
-                            value: _isLoadingPlanes ? '...' : '${_planesGuardados.length}',
+                            value: _cargandoPlanes ? '...' : '${_planesGuardados.length}',
                             onTap: () {
                               Navigator.push(
                                 context,
@@ -589,7 +602,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   }
 
   Widget _buildPlanesLista() {
-    if (_isLoadingPlanes) {
+    if (_cargandoPlanes) {
       return const Padding(
         padding: EdgeInsets.all(32),
         child: Center(
@@ -642,7 +655,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   }
 
   Widget _buildHistorialList() {
-    if (_isLoadingHistorial) {
+    if (_cargandoHistorial) {
       return const Padding(
         padding: EdgeInsets.all(32),
         child: Center(
@@ -717,13 +730,15 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
       );
       if (image != null) {
         if (kIsWeb) {
-          // En web Image.file no funciona, se leen los bytes directamente
+          // En web Image.file no funciona, se guardan los bytes como base64
           final bytes = await image.readAsBytes();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('foto_perfil_web_${_datosUsuario['id']}', base64Encode(bytes));
           setState(() => _fotoBytes = bytes);
         } else {
           // En movil/desktop se guarda la ruta y se persiste
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('foto_perfil_${_userData['id']}', image.path);
+          await prefs.setString('foto_perfil_${_datosUsuario['id']}', image.path);
           setState(() => _fotoPath = image.path);
         }
       }
@@ -733,13 +748,17 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   }
 
   void _eliminarFoto() async {
-    // Borra la ruta persistida ademas de limpiar el estado
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('foto_perfil_${_userData['id']}');
+    // Se limpia la clave correcta segun la plataforma
+    if (kIsWeb) {
+      await prefs.remove('foto_perfil_web_${_datosUsuario['id']}');
+    } else {
+      await prefs.remove('foto_perfil_${_datosUsuario['id']}');
+    }
     setState(() {
       _fotoPath = null;
       _fotoBytes = null;
-      _userData['foto_url'] = null;
+      _datosUsuario['foto_url'] = null;
     });
     _mostrarSnackbar('Foto eliminada correctamente');
   }
@@ -816,6 +835,8 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
         return Icons.person_add_rounded;
       case 'generar_plan':
         return Icons.school_rounded;
+      case 'actualizar_perfil':
+        return Icons.edit_rounded;
       default:
         return Icons.circle_notifications_rounded;
     }
@@ -829,6 +850,8 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
         return const Color(0xFF1A1FC8);
       case 'generar_plan':
         return const Color(0xFF00D4FF);
+      case 'actualizar_perfil':
+        return const Color(0xFFF59E0B);
       default:
         return const Color(0xFF6B7280);
     }
@@ -837,11 +860,13 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   String _getAccionTexto(String accion) {
     switch (accion) {
       case 'login':
-        return 'Inicio de sesión';
+        return 'Inicio de sesion';
       case 'registro':
         return 'Registro de cuenta';
       case 'generar_plan':
-        return 'Generación de plan';
+        return 'Generacion de plan';
+      case 'actualizar_perfil':
+        return 'Actualizacion de perfil';
       default:
         return accion;
     }

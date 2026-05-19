@@ -4,8 +4,9 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
-import '../models/plan_model.dart';
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
+import '../models/modelo_plan.dart';
 
 class PantallaVerPlan extends StatefulWidget {
   final String token;
@@ -22,9 +23,9 @@ class PantallaVerPlan extends StatefulWidget {
 }
 
 class _PantallaVerPlanState extends State<PantallaVerPlan> {
-  final ApiService _apiService = ApiService();
-  PlanResponse? _plan;
-  bool _isLoading = true;
+  final ServicioApi _servicioApi = ServicioApi();
+  RespuestaPlan? _plan;
+  bool _cargando = true;
   String? _error;
 
   @override
@@ -35,24 +36,26 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
 
   Future<void> _cargarPlan() async {
     setState(() {
-      _isLoading = true;
+      _cargando = true;
       _error = null;
     });
 
     try {
-      final planData = await _apiService.getPlan(widget.token, widget.planId);
+      final datosPlan = await _servicioApi.obtenerPlan(widget.token, widget.planId);
       
-      // Convertir el mapa a PlanResponse
-      final planResponse = PlanResponse.fromJson(planData['plan_generado']);
+      // Convertir el mapa a RespuestaPlan
+      final respuestaPlan = RespuestaPlan.fromJson(datosPlan['plan_generado']);
       
       setState(() {
-        _plan = planResponse;
-        _isLoading = false;
+        _plan = respuestaPlan;
+        _cargando = false;
       });
+    } on SesionExpiradaException {
+      if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
       setState(() {
         _error = e.toString();
-        _isLoading = false;
+        _cargando = false;
       });
     }
   }
@@ -66,7 +69,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
       case 'compartida':
         return Colors.amber;
       case 'practica':
-        return Colors.orange;
+        return Colors.purple.shade900;
       default:
         return Colors.grey;
     }
@@ -107,7 +110,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
           ),
         ],
       ),
-      body: _isLoading
+      body: _cargando
           ? const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,

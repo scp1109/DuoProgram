@@ -1,5 +1,5 @@
 // ============================================================
-//  plan_model.dart
+//  modelo_plan.dart
 //  Modelos para parsear la respuesta del API
 // ============================================================
 
@@ -79,19 +79,19 @@ class SemestrePlan {
   }
 }
 
-class PlanResponse {
+class RespuestaPlan {
   final List<SemestrePlan> semestres;
   final int totalSemestresFuturos;
   final String mensaje;
 
-  PlanResponse({
+  RespuestaPlan({
     required this.semestres,
     required this.totalSemestresFuturos,
     required this.mensaje,
   });
 
-  factory PlanResponse.fromJson(Map<String, dynamic> json) {
-    return PlanResponse(
+  factory RespuestaPlan.fromJson(Map<String, dynamic> json) {
+    return RespuestaPlan(
       semestres: (json['semestres'] as List)
           .map((s) => SemestrePlan.fromJson(s))
           .toList(),

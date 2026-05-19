@@ -6,21 +6,22 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
-import '../models/plan_model.dart';
+import '../models/modelo_plan.dart';
 import '../data/datos_programa.dart';
-import '../services/api_service.dart';
-import '../widgets/drawer_menu.dart';
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
+import '../widgets/menu_lateral.dart';
 import 'pantalla_seleccion.dart';
 
 class PantallaPlanificacion extends StatefulWidget {
-  final PlanResponse planResponse;
+  final RespuestaPlan respuestaPlan;
   final Programa? programaPrincipal;
   final Programa? programaSecundario;
   final String token;
-  final Map<String, dynamic> userData;
+  final Map<String, dynamic> datosUsuario;
 
   // Datos necesarios para guardar el plan
-  final Map<String, dynamic> planData;
+  final Map<String, dynamic> datosPlan;
   final int semestresCursados;
   final double promedio;
   final List<String> materiasAprobadas;
@@ -28,12 +29,12 @@ class PantallaPlanificacion extends StatefulWidget {
 
   const PantallaPlanificacion({
     super.key,
-    required this.planResponse,
+    required this.respuestaPlan,
     this.programaPrincipal,
     this.programaSecundario,
     required this.token,
-    required this.userData,
-    required this.planData,
+    required this.datosUsuario,
+    required this.datosPlan,
     required this.semestresCursados,
     required this.promedio,
     required this.materiasAprobadas,
@@ -45,7 +46,7 @@ class PantallaPlanificacion extends StatefulWidget {
 }
 
 class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
-  final ApiService _apiService = ApiService();
+  final ServicioApi _servicioApi = ServicioApi();
   bool _guardando = false;
 
   Color _getOrigenColor(String origen) {
@@ -53,7 +54,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
       case 'principal':  return Colors.blue;
       case 'secundario': return Colors.green;
       case 'compartida': return Colors.amber;
-      case 'practica':   return Colors.orange;
+      case 'practica':   return Colors.purple.shade900;
       default:           return Colors.grey;
     }
   }
@@ -75,7 +76,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
     setState(() => _guardando = true);
 
     try {
-      await _apiService.guardarPlan(
+      await _servicioApi.guardarPlan(
         token:              widget.token,
         nombre:             nombre,
         programaPrincipal:  widget.programaPrincipal?.codigo ?? '',
@@ -84,10 +85,15 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
         promedio:           widget.promedio,
         materiasAprobadas:  widget.materiasAprobadas,
         homologaciones:     widget.homologaciones,
-        planGenerado:       widget.planData,
+        planGenerado:       widget.datosPlan,
       );
+    } on SesionExpiradaException {
+      if (mounted) {
+        setState(() => _guardando = false);
+        await SesionHelper.manejarSesionExpirada(context);
+      }
+      return;
     } catch (e) {
-      // Si el guardado falla no bloqueamos la navegacion; solo notificamos.
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -104,7 +110,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
         MaterialPageRoute(
           builder: (_) => PantallaSeleccion(
             token:    widget.token,
-            userData: widget.userData,
+            datosUsuario: widget.datosUsuario,
           ),
         ),
         (route) => false,
@@ -195,7 +201,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
       canPop: false,
       child: Scaffold(
       backgroundColor: const Color(0xFFF0F2FF),
-      drawer: DrawerMenu(token: widget.token, userData: widget.userData),
+      drawer: MenuLateral(token: widget.token, datosUsuario: widget.datosUsuario),
       appBar: AppBar(
         title: const Text('Plan de Estudios'),
         backgroundColor: const Color(0xFF1A1FC8),
@@ -221,7 +227,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    '${widget.planResponse.totalSemestresFuturos}',
+                    '${widget.respuestaPlan.totalSemestresFuturos}',
                     style: const TextStyle(
                       color: Colors.black,
                       fontWeight: FontWeight.bold,
@@ -305,9 +311,9 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
       ),
       body: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: widget.planResponse.semestres.length,
+        itemCount: widget.respuestaPlan.semestres.length,
         itemBuilder: (context, index) {
-          final semestre = widget.planResponse.semestres[index];
+          final semestre = widget.respuestaPlan.semestres[index];
           return Card(
             margin: const EdgeInsets.only(bottom: 16),
             elevation: 2,
@@ -541,12 +547,12 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                         ),
                         const Spacer(),
                         Text(
-                          '9 creditos',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.orange.shade700,
-                          ),
+                        '${semestre.totalCreditos} creditos',
+                        style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange.shade700,
+                        ),
                         ),
                       ],
                     ),

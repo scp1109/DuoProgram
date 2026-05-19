@@ -6,7 +6,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
-import '../services/api_service.dart';
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
 import 'pantalla_registro.dart';
 import 'pantalla_seleccion.dart';
 
@@ -18,43 +19,74 @@ class PantallaInicio extends StatefulWidget {
 }
 
 class _PantallaInicioState extends State<PantallaInicio> {
-  final ApiService _apiService = ApiService();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _obscurePassword = true;
-  bool _isLoading = false;
+  final ServicioApi _servicioApi = ServicioApi();
+  final _correoController = TextEditingController();
+  final _contrasenaController = TextEditingController();
+  bool _ocultarContrasena = true;
+  bool _cargando = false;
+  bool _verificandoSesion = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _intentarRestaurarSesion());
+  }
+
+  Future<void> _intentarRestaurarSesion() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null) {
+      if (mounted) setState(() => _verificandoSesion = false);
+      return;
+    }
+
+    try {
+      final perfil = await _servicioApi.obtenerPerfil(token);
+      await prefs.setString('user_data', jsonEncode(perfil));
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PantallaSeleccion(
+            token: token,
+            datosUsuario: perfil,
+          ),
+        ),
+      );
+    } on SesionExpiradaException {
+      await SesionHelper.limpiarCredenciales();
+      if (mounted) setState(() => _verificandoSesion = false);
+    } catch (_) {
+      if (mounted) setState(() => _verificandoSesion = false);
+    }
+  }
 
   @override
   void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
+    _correoController.dispose();
+    _contrasenaController.dispose();
     super.dispose();
   }
 
   Future<void> _iniciarSesion() async {
-    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+    if (_correoController.text.isEmpty || _contrasenaController.text.isEmpty) {
       _mostrarSnackbar('Por favor, completa todos los campos');
       return;
     }
 
-    setState(() => _isLoading = true);
+    setState(() => _cargando = true);
 
     try {
-      final result = await _apiService.login(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
+      final resultado = await _servicioApi.iniciarSesion(
+        correo: _correoController.text.trim(),
+        contrasena: _contrasenaController.text,
       );
 
-      // ========== AGREGAR ESTAS LÍNEAS ==========
-      // Guardar token y datos del usuario
-      final token = result['access_token'];
-      final userData = result['user'];
-      
-      // Guardar en SharedPreferences
+      final token = resultado['access_token'];
+      final datosUsuario = resultado['user'];
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('token', token);
-      await prefs.setString('user_data', jsonEncode(userData));
-      // ==========================================
+      await prefs.setString('user_data', jsonEncode(datosUsuario));
 
       if (mounted) {
         Navigator.pushReplacement(
@@ -62,7 +94,7 @@ class _PantallaInicioState extends State<PantallaInicio> {
           MaterialPageRoute(
             builder: (_) => PantallaSeleccion(
               token: token,
-              userData: userData,
+              datosUsuario: datosUsuario,
             ),
           ),
         );
@@ -72,7 +104,7 @@ class _PantallaInicioState extends State<PantallaInicio> {
         _mostrarSnackbar('Error: ${e.toString().replaceFirst('Exception: ', '')}');
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _cargando = false);
     }
   }
 
@@ -88,6 +120,15 @@ class _PantallaInicioState extends State<PantallaInicio> {
 
   @override
   Widget build(BuildContext context) {
+    if (_verificandoSesion) {
+      return const Scaffold(
+        backgroundColor: Color(0xFFF0F2FF),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF1A1FC8)),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2FF),
       body: SafeArea(
@@ -138,7 +179,7 @@ class _PantallaInicioState extends State<PantallaInicio> {
               const SizedBox(height: 50),
               
               TextField(
-                controller: _emailController,
+                controller: _correoController,
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
                   labelText: 'Correo institucional',
@@ -160,17 +201,17 @@ class _PantallaInicioState extends State<PantallaInicio> {
               const SizedBox(height: 16),
               
               TextField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
+                controller: _contrasenaController,
+                obscureText: _ocultarContrasena,
                 decoration: InputDecoration(
                   labelText: 'Contraseña',
                   prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF1A1FC8)),
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                      _ocultarContrasena ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                       color: const Color(0xFF9CA3AF),
                     ),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    onPressed: () => setState(() => _ocultarContrasena = !_ocultarContrasena),
                   ),
                   filled: true,
                   fillColor: Colors.white,
@@ -206,7 +247,7 @@ class _PantallaInicioState extends State<PantallaInicio> {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _iniciarSesion,
+                  onPressed: _cargando ? null : _iniciarSesion,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1A1FC8),
                     foregroundColor: Colors.white,
@@ -215,7 +256,7 @@ class _PantallaInicioState extends State<PantallaInicio> {
                     ),
                     elevation: 0,
                   ),
-                  child: _isLoading
+                  child: _cargando
                       ? const SizedBox(
                           width: 24,
                           height: 24,

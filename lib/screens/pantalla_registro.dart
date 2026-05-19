@@ -4,7 +4,7 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import '../services/servicio_api.dart';
 import 'pantalla_seleccion.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';  // Para jsonEncode
@@ -19,23 +19,23 @@ class PantallaRegistro extends StatefulWidget {
 class _PantallaRegistroState extends State<PantallaRegistro> {
   final _formKey = GlobalKey<FormState>();
   final _nombreController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
+  final _correoController = TextEditingController();
+  final _contrasenaController = TextEditingController();
+  final _confirmarContrasenaController = TextEditingController();
   
-  final ApiService _apiService = ApiService();
+  final ServicioApi _servicioApi = ServicioApi();
   
-  bool _obscurePassword = true;
-  bool _obscureConfirmPassword = true;
+  bool _ocultarContrasena = true;
+  bool _ocultarConfirmarContrasena = true;
   bool _aceptaTerminos = false;
-  bool _isLoading = false;
+  bool _cargando = false;
 
   @override
   void dispose() {
     _nombreController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
+    _correoController.dispose();
+    _contrasenaController.dispose();
+    _confirmarContrasenaController.dispose();
     super.dispose();
   }
 
@@ -46,34 +46,29 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
     return;
   }
 
-  setState(() => _isLoading = true);
+  setState(() => _cargando = true);
 
   try {
-    final result = await _apiService.registro(
+    final resultado = await _servicioApi.registro(
       nombreCompleto: _nombreController.text.trim(),
-      email: _emailController.text.trim(),
-      password: _passwordController.text,
+      correo: _correoController.text.trim(),
+      contrasena: _contrasenaController.text,
     );
 
-    // ========== AGREGAR ESTAS LÍNEAS ==========
-    // Guardar token y datos del usuario
-    final token = result['access_token'];
-    final userData = result['user'];
-    
-    // Guardar en SharedPreferences
+    final token = resultado['access_token'];
+    final datosUsuario = resultado['user'];
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('token', token);
-    await prefs.setString('user_data', jsonEncode(userData));
-    // ==========================================
+    await prefs.setString('user_data', jsonEncode(datosUsuario));
 
     if (mounted) {
-      _mostrarSnackbar('✅ Registro exitoso. ¡Bienvenido!');
+      _mostrarSnackbar('Registro exitoso. ¡Bienvenido!');
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (_) => PantallaSeleccion(
             token: token,
-            userData: userData,
+            datosUsuario: datosUsuario,
           ),
         ),
       );
@@ -83,7 +78,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
       _mostrarSnackbar(' Error: ${e.toString().replaceFirst('Exception: ', '')}', isError: true);
     }
   } finally {
-    if (mounted) setState(() => _isLoading = false);
+    if (mounted) setState(() => _cargando = false);
   }
 }
 
@@ -198,7 +193,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
 
                 // Correo institucional
                 TextFormField(
-                  controller: _emailController,
+                  controller: _correoController,
                   keyboardType: TextInputType.emailAddress,
                   decoration: InputDecoration(
                     labelText: 'Correo institucional',
@@ -229,17 +224,17 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
 
                 // Contraseña
                 TextFormField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
+                  controller: _contrasenaController,
+                  obscureText: _ocultarContrasena,
                   decoration: InputDecoration(
                     labelText: 'Contraseña',
                     prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF1A1FC8)),
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                        _ocultarContrasena ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                         color: const Color(0xFF9CA3AF),
                       ),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      onPressed: () => setState(() => _ocultarContrasena = !_ocultarContrasena),
                     ),
                     filled: true,
                     fillColor: Colors.white,
@@ -266,17 +261,17 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
 
                 // Confirmar contraseña
                 TextFormField(
-                  controller: _confirmPasswordController,
-                  obscureText: _obscureConfirmPassword,
+                  controller: _confirmarContrasenaController,
+                  obscureText: _ocultarConfirmarContrasena,
                   decoration: InputDecoration(
                     labelText: 'Confirmar contraseña',
                     prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF1A1FC8)),
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscureConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                        _ocultarConfirmarContrasena ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                         color: const Color(0xFF9CA3AF),
                       ),
-                      onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                      onPressed: () => setState(() => _ocultarConfirmarContrasena = !_ocultarConfirmarContrasena),
                     ),
                     filled: true,
                     fillColor: Colors.white,
@@ -295,7 +290,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) return 'Confirma tu contraseña';
-                    if (value != _passwordController.text) return 'Las contraseñas no coinciden';
+                    if (value != _contrasenaController.text) return 'Las contraseñas no coinciden';
                     return null;
                   },
                 ),
@@ -348,7 +343,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
                   width: double.infinity,
                   height: 52,
                   child: ElevatedButton(
-                    onPressed: _isLoading ? null : _registrar,
+                    onPressed: _cargando ? null : _registrar,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF1A1FC8),
                       foregroundColor: Colors.white,
@@ -357,7 +352,7 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
                       ),
                       elevation: 0,
                     ),
-                    child: _isLoading
+                    child: _cargando
                         ? const SizedBox(
                             width: 24,
                             height: 24,

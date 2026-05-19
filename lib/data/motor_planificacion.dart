@@ -1,18 +1,10 @@
 // ============================================================
 //  motor_planificacion.dart
-//  Algoritmo: Critical Path Method (CPM) + bin packing
-//
-//  Objetivo: terminar en el MENOR número de semestres posible
-//
-//  Restricciones:
-//  R1 — Prácticas al último semestre (máx 1 materia adicional)
-//  R2 — Inglés homologado se excluye del plan
-//  R3 — Semestre 1 fijo si nivel I tiene pendientes
-//  R4 — Máximo de créditos por semestre según promedio
-//  R5 — Mínimo de créditos por semestre (evitar semestres vacíos)
-//  R6 — Prerrequisitos siempre respetados
-//  R7 — Homologaciones externas cubren slots de electivas
-//  R8 — Materias compartidas cuentan una sola vez
+//  NOTA: Este archivo ya no se usa en la app.
+//  El motor de planificacion fue migrado al backend (FastAPI).
+//  Todo el calculo de planes se hace via POST /plan/planificar.
+//  Se conserva como referencia historica del algoritmo CPM
+//  que existia antes de la migracion al backend.
 // ============================================================
 
 import 'datos_programa.dart';

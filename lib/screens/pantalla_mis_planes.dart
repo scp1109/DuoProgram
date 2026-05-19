@@ -4,7 +4,8 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import '../services/servicio_api.dart';
+import '../utils/sesion_helper.dart';
 import 'pantalla_ver_plan.dart';
 
 class PantallaMisPlanes extends StatefulWidget {
@@ -17,9 +18,9 @@ class PantallaMisPlanes extends StatefulWidget {
 }
 
 class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
-  final ApiService _apiService = ApiService();
+  final ServicioApi _servicioApi = ServicioApi();
   List<dynamic> _planes = [];
-  bool _isLoading = true;
+  bool _cargando = true;
   String? _error;
 
   @override
@@ -30,20 +31,22 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
 
   Future<void> _cargarPlanes() async {
     setState(() {
-      _isLoading = true;
+      _cargando = true;
       _error = null;
     });
 
     try {
-      final planes = await _apiService.getMisPlanes(widget.token);
+      final planes = await _servicioApi.obtenerMisPlanes(widget.token);
       setState(() {
         _planes = planes;
-        _isLoading = false;
+        _cargando = false;
       });
+    } on SesionExpiradaException {
+      if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
       setState(() {
         _error = e.toString();
-        _isLoading = false;
+        _cargando = false;
       });
     }
   }
@@ -73,9 +76,9 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
     );
 
     if (confirm == true) {
-      setState(() => _isLoading = true);
+      setState(() => _cargando = true);
       try {
-        await _apiService.eliminarPlan(widget.token, planId);
+        await _servicioApi.eliminarPlanGuardado(widget.token, planId);
         await _cargarPlanes();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -83,8 +86,10 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
             backgroundColor: Colors.green,
           ),
         );
+      } on SesionExpiradaException {
+        if (mounted) await SesionHelper.manejarSesionExpirada(context);
       } catch (e) {
-        setState(() => _isLoading = false);
+        setState(() => _cargando = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al eliminar: ${e.toString().replaceFirst('Exception: ', '')}'),
@@ -125,7 +130,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
           ),
         ],
       ),
-      body: _isLoading
+      body: _cargando
           ? const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,

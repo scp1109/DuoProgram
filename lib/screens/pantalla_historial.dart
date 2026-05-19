@@ -7,17 +7,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../data/datos_programa.dart';
-import '../services/api_service.dart';
-import '../models/plan_model.dart';
+import '../services/servicio_api.dart';
+import '../models/modelo_plan.dart';
 import 'pantalla_planificacion.dart';
-import '../widgets/drawer_menu.dart'; 
+import '../widgets/menu_lateral.dart';
+import '../utils/sesion_helper.dart';
 
 String _norm(String s) {
-  const a = 'áéíóúàèìòùäëïöüâêîôûãõñÁÉÍÓÚÀÈÌÒÙÄËÏÖÜÂÊÎÔÛÃÕÑ';
-  const b = 'aeiouaeiouaeiouaeiouaonAEIOUAEIOUAEIOUAEIOUAON';
-  var r = s.toLowerCase();
-  for (var i = 0; i < a.length; i++) r = r.replaceAll(a[i], b[i]);
-  return r;
+  const map = <String, String>{
+    'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u', 'ñ': 'n',
+  };
+  return s.toLowerCase().replaceAllMapped(
+    RegExp(r'[áéíóúñ]'),
+    (m) => map[m[0]!] ?? m[0]!,
+  );
 }
 
 class RegistroMateria {
@@ -35,16 +38,16 @@ class PantallaHistorial extends StatefulWidget {
   final Programa programa;
   final Programa? programaSecundario;
   final List<Map<String, dynamic>>? programas;
-  final String token; 
-  final Map<String, dynamic> userData;
-  
+  final String token;
+  final Map<String, dynamic> datosUsuario;
+
   const PantallaHistorial({
     super.key,
     required this.programa,
     this.programaSecundario,
     this.programas,
     required this.token,
-    required this.userData,
+    required this.datosUsuario,
   });
 
   @override
@@ -57,31 +60,13 @@ class FormatoDecimal extends TextInputFormatter {
     TextEditingValue valorAnterior,
     TextEditingValue valorNuevo,
   ) {
-    // Detectar si el usuario está borrando
-    final estaBorrando =
-        valorNuevo.text.length < valorAnterior.text.length;
-
+    final estaBorrando = valorNuevo.text.length < valorAnterior.text.length;
     String texto = valorNuevo.text;
-
-    // Si está borrando, no intervenir
-    if (estaBorrando) {
-      return valorNuevo;
-    }
-
-    // Solo números
+    if (estaBorrando) return valorNuevo;
     texto = texto.replaceAll(RegExp(r'[^0-9]'), '');
-
-    if (texto.isEmpty) {
-      return const TextEditingValue(text: '');
-    }
-
-    // Máximo 3 dígitos → x.xx
-    if (texto.length > 3) {
-      texto = texto.substring(0, 3);
-    }
-
+    if (texto.isEmpty) return const TextEditingValue(text: '');
+    if (texto.length > 3) texto = texto.substring(0, 3);
     String formateado;
-
     if (texto.length == 1) {
       formateado = '$texto.';
     } else if (texto.length == 2) {
@@ -89,7 +74,6 @@ class FormatoDecimal extends TextInputFormatter {
     } else {
       formateado = '${texto[0]}.${texto.substring(1)}';
     }
-
     return TextEditingValue(
       text: formateado,
       selection: TextSelection.collapsed(offset: formateado.length),
@@ -98,10 +82,10 @@ class FormatoDecimal extends TextInputFormatter {
 }
 
 class _PantallaHistorialState extends State<PantallaHistorial> {
-  final ApiService _apiService = ApiService();
+  final ServicioApi _servicioApi = ServicioApi();
   bool _isGeneratingPlan = false;
   int _paso = 0;
-  bool _practicaUnica = true;   // true = una práctica para ambos, false = dos separadas
+  bool _practicaUnica = true;
   double _promedio = 0.0;
   // Controla si el usuario ya escribio algo en el campo de promedio.
   // El mensaje de feedback solo se muestra cuando es true.
@@ -109,7 +93,6 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   final _ctrlPromedio = TextEditingController();
 
   final Set<int> _inglesHomologados = {};
-
   final List<HomologacionExterna> _homologacionesExternas = [];
   String _busqHomolog = '';
   final _ctrlHomolog = TextEditingController();
@@ -118,49 +101,149 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   int _semestresCursados = 1;
   int? _semestreExpandido = 1;
 
-  final Map<int, String> _busqAdicional = {};
-  final Map<int, TextEditingController> _ctrlAdicional = {};
-  final Map<int, bool> _mostrarAdicional = {};
+  // ── Cache de materias (inmutable durante esta pantalla) ────────────────────
+  // Se construyen una vez en initState; los programas no cambian en esta pantalla.
+  late final List<Materia> _cacheMaterias;
+  late final List<Materia> _cacheMateriasYElectivas;
+  late final Map<String, Materia> _indexMaterias;
 
-  // ── Helpers ──────────────────────────────────────────────
+  // ── Cache de aprobadas por semestre ───────────────────────────
+  // Se recalcula SOLO cuando cambian _registros, _inglesHomologados o
+  // _homologacionesExternas; no en cada setState del wizard.
+  Map<int, Set<String>> _cacheAprobadas = {};
+  Map<int, Set<String>> _cacheAprobadasRegistradas = {};
 
-  List<Materia> get _todasLasMaterias {
+  @override
+  void initState() {
+    super.initState();
+    // Construir lista unificada principal + secundario (sin duplicados)
     final lista = [...widget.programa.materias];
     if (widget.programaSecundario != null) {
       for (final m in widget.programaSecundario!.materias) {
         if (!lista.any((x) => x.codigo == m.codigo)) lista.add(m);
       }
     }
-    return lista;
-  }
+    _cacheMaterias = List.unmodifiable(lista);
 
-  List<Materia> get _todasLasMateriasYElectivas {
-    final lista = [..._todasLasMaterias];
+    // Agregar opciones de electivas
+    final listaConElectivas = [...lista];
     for (final prog in [widget.programa, widget.programaSecundario]) {
       if (prog == null) continue;
       for (final grupo in prog.gruposElectivas) {
         for (final opcion in grupo.opciones) {
-          if (!lista.any((m) => m.codigo == opcion.codigo)) {
-            lista.add(opcion);
+          if (!listaConElectivas.any((m) => m.codigo == opcion.codigo)) {
+            listaConElectivas.add(opcion);
           }
         }
       }
     }
-    return lista;
+    _cacheMateriasYElectivas = List.unmodifiable(listaConElectivas);
+    _indexMaterias = {for (final m in listaConElectivas) m.codigo: m};
+
+    _recalcularAprobadas();
+    final max = _maxSemestresCursados;
+    if (_semestresCursados > max) {
+      _semestresCursados = max;
+      _semestreExpandido = max;
+      _recalcularAprobadas();
+    }
   }
 
-  Set<String> get _aprobadas => _registros
-      .where((r) => r.aprobada)
-      .map((r) => r.codigo)
-      .toSet();
+  // Recalcula el cache de aprobadas para todos los semestres de una vez.
+  // O(semestres × registros) total en lugar de O(semestres² × registros) por build.
+  void _recalcularAprobadas() {
+    final nuevoAprobadas = <int, Set<String>>{};
+    final nuevoRegistradas = <int, Set<String>>{};
+    for (int sem = 1; sem <= _semestresCursados + 2; sem++) {
+      final validas = _aprobadasExternas();
+      final registradasValidas = <String>{};
+      for (int s = 1; s < sem; s++) {
+        final validasAntes = Set<String>.from(validas);
+        final nuevas = <String>{};
+        for (final r in _registros.where((r) => r.semestre == s && r.aprobada)) {
+          if (validas.contains(r.codigo)) continue;
+          // Usar indexMaterias para lookup O(1)
+          final mat = _indexMaterias[r.codigo];
+          if (mat == null ||
+              mat.prerrequisitos.every((p) => validasAntes.contains(p))) {
+            nuevas.add(r.codigo);
+            registradasValidas.add(r.codigo);
+          }
+        }
+        validas.addAll(nuevas);
+      }
+      nuevoAprobadas[sem] = validas;
+      nuevoRegistradas[sem] = Set<String>.from(registradasValidas);
+    }
+    _cacheAprobadas = nuevoAprobadas;
+    _cacheAprobadasRegistradas = nuevoRegistradas;
+  }
+
+  final Map<int, String> _busqAdicional = {};
+  final Map<int, TextEditingController> _ctrlAdicional = {};
+  final Map<int, bool> _mostrarAdicional = {};
+
+  // ── Helpers ──────────────────────────────────────────────
+
+  // Retorna la lista cacheada (no reconstruye en cada llamada)
+  // List<Materia> get _todasLasMaterias => _cacheMaterias;
+
+  /// Maximo de semestres cursados segun la malla (max nivel en ambos programas).
+  int get _maxSemestresCursados {
+    int maxNivel = 0;
+    for (final m in _cacheMaterias) {
+      if (m.nivel > maxNivel) maxNivel = m.nivel;
+    }
+    return maxNivel > 0 ? maxNivel : 10;
+  }
+
+  // Retorna la lista cacheada con electivas incluidas
+  List<Materia> get _todasLasMateriasYElectivas => _cacheMateriasYElectivas;
+
+  /// Prerrequisitos de codigos compartidos cuando la BD no los trae (ej. ISCO CBAS_E02A).
+  static const Map<String, List<String>> _prerequisitosCanonicos = {
+    'CBAS_E02A': ['CBAS_E01A'],
+  };
+
+  /// Fusiona prerrequisitos de todas las apariciones del codigo en ambas mallas.
+  Materia? _materiaUnificada(String codigo) {
+    final base = _indexMaterias[codigo];
+    if (base == null) return null;
+    // Merge prereqs del canonico si aplica
+    final prereqsExtra = _prerequisitosCanonicos[codigo] ?? const [];
+    if (prereqsExtra.isEmpty) return base;
+    final prereqs = {...base.prerrequisitos, ...prereqsExtra}.toList();
+    return Materia(
+      codigo: base.codigo,
+      nombre: base.nombre,
+      creditos: base.creditos,
+      nivel: base.nivel,
+      prerrequisitos: prereqs,
+    );
+  }
+
+  /// Prerrequisito aprobado en semestres anteriores validos.
+  bool _prereqCumplido(String prereq, int semestre) {
+    if (_aprobadasValidasAntesDeSemestre(semestre).contains(prereq)) return true;
+    return _registros.any(
+      (r) => r.codigo == prereq && r.semestre < semestre && r.aprobada,
+    );
+  }
+
+  bool _prerrequisitosCumplidos(String codigo, int semestre) {
+    final mat = _materiaUnificada(codigo);
+    if (mat == null || mat.prerrequisitos.isEmpty) return true;
+    return mat.prerrequisitos.every((p) => _prereqCumplido(p, semestre));
+  }
+
+  Set<String> get _aprobadas =>
+      _aprobadasRegistradasValidasAntesDeSemestre(_semestresCursados + 1);
 
   Set<String> get _todasAprobadas {
     final set = _aprobadas;
     for (final h in _homologacionesExternas) set.add(h.codigoMateria);
     for (final n in _inglesHomologados) {
-      if (n >= 1 && n <= codigosIngles.length) {
-        set.add(codigosIngles[n - 1]);
-      }
+      if (n >= 1 && n <= codigosIngles.length) set.add(codigosIngles[n - 1]);
     }
     return set;
   }
@@ -168,11 +251,92 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   List<RegistroMateria> _registrosDeSemestre(int sem) =>
       _registros.where((r) => r.semestre == sem).toList();
 
+  Set<String> _aprobadasExternas() {
+    return {
+      ..._homologacionesExternas.map((h) => h.codigoMateria),
+      ..._inglesHomologados
+          .where((n) => n >= 1 && n <= codigosIngles.length)
+          .map((n) => codigosIngles[n - 1]),
+    };
+  }
+
+  // Retorna del cache. El cache se recalcula en _recalcularAprobadas()
+  // cada vez que cambian los registros, no durante el build.
+  Set<String> _aprobadasValidasAntesDeSemestre(int semestre) {
+    return _cacheAprobadas[semestre] ?? _aprobadasExternas();
+  }
+
+  Set<String> _aprobadasRegistradasValidasAntesDeSemestre(int semestre) {
+    return _cacheAprobadasRegistradas[semestre] ?? <String>{};
+  }
+
+  // Calcula en que semestre debe aparecer cada ingles pendiente.
+  // Regla: el primer ingles no homologado arranca en semestre 2,
+  // pero si se pierde, el siguiente no aparece hasta que el anterior este aprobado.
+  // Se calcula dinamicamente basado en los registros reales del estudiante.
+  Map<String, int> _inglesNivelAjustadoParaSemestre(int semestre, Set<String> aprobadasAntes) {
+    final ajustados = <String, int>{};
+    // El primer ingles pendiente arranca en semestre 2
+    int semBase = 2;
+    for (int i = 0; i < codigosIngles.length; i++) {
+      final codigo = codigosIngles[i];
+      final nivel = i + 1;
+      if (_inglesHomologados.contains(nivel)) continue;
+      // Este ingles aparece solo si el anterior ya fue aprobado
+      // (o es el primero de la cadena)
+      if (i > 0) {
+        final anterior = codigosIngles[i - 1];
+        // Si el anterior no esta aprobado, este no aparece aun
+        if (!aprobadasAntes.contains(anterior)) break;
+        // El semestre de este ingles es el siguiente al que fue aprobado el anterior
+        final semAprobadoAnterior = _registros
+            .where((r) => r.codigo == anterior && r.aprobada)
+            .map((r) => r.semestre)
+            .fold<int>(0, (prev, s) => s > prev ? s : prev);
+        if (semAprobadoAnterior > 0) {
+          semBase = semAprobadoAnterior + 1;
+        }
+      }
+      ajustados[codigo] = semBase;
+      semBase++;
+    }
+    return ajustados;
+  }
+
+  // Calcula los creditos totales cursados en un semestre
+  // (malla + adicionales, sin importar si aprobo o perdio)
+  int _creditosSemestre(int semestre) {
+    int total = 0;
+    for (final r in _registrosDeSemestre(semestre)) {
+      final mat = _indexMaterias[r.codigo];
+      total += mat?.creditos ?? 0;
+    }
+    return total;
+  }
+
+  // Maximo de creditos permitidos segun promedio
+  int get _maxCreditosSemestre => _promedio >= 4.0 ? 20 : 18;
+
+  bool _esExcepcionCreditosCdat(int semestre) =>
+      widget.programa.codigo.toUpperCase() == 'CDAT' && semestre == 4;
+
+  int _maxCreditosParaSemestre(int semestre) =>
+      _esExcepcionCreditosCdat(semestre) ? 21 : _maxCreditosSemestre;
+
+  List<int> get _semestresExcedidos {
+    final excedidos = <int>[];
+    for (int semestre = 1; semestre <= _semestresCursados; semestre++) {
+      if (_creditosSemestre(semestre) > _maxCreditosParaSemestre(semestre)) {
+        excedidos.add(semestre);
+      }
+    }
+    return excedidos;
+  }
+
+  bool get _haySemestresExcedidos => _semestresExcedidos.isNotEmpty;
+
   List<Materia> _materiasDelNivel(int nivel) =>
       widget.programa.materias.where((m) => m.nivel == nivel).toList();
-
-  bool _estaAprobada(String codigo) =>
-      _todasAprobadas.contains(codigo);
 
   bool _estaHomologadaExterna(String codigo) =>
       _homologacionesExternas.any((h) => h.codigoMateria == codigo);
@@ -180,8 +344,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   bool _estaInglesHomologado(String codigo) {
     final idx = codigosIngles.indexOf(codigo);
     if (idx < 0) return false;
-    final nivel = idx + 1;
-    return _inglesHomologados.contains(nivel);
+    return _inglesHomologados.contains(idx + 1);
   }
 
   bool _fueRegistrada(String codigo, int semestre) =>
@@ -199,106 +362,152 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   int get _creditosAprobados {
     int creditos = 0;
     for (final m in widget.programa.materias) {
-      if (_todasAprobadas.contains(m.codigo)) {
-        creditos += m.creditos;
-      }
+      if (_todasAprobadas.contains(m.codigo)) creditos += m.creditos;
     }
     return creditos;
   }
 
   void _registrar(String codigo, int semestre, bool aprobada) {
+    if (aprobada && !_prerrequisitosCumplidos(codigo, semestre)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No puedes marcar esta materia como aprobada: faltan prerrequisitos aprobados.',
+          ),
+          backgroundColor: Color(0xFFFF6B6B),
+        ),
+      );
+      return;
+    }
     setState(() {
-      final idx = _registros.indexWhere(
-          (r) => r.codigo == codigo && r.semestre == semestre);
+      final idx = _registros
+          .indexWhere((r) => r.codigo == codigo && r.semestre == semestre);
       if (idx >= 0) {
-        _registros[idx] = RegistroMateria(
-            codigo: codigo, semestre: semestre, aprobada: aprobada);
+        _registros[idx] =
+            RegistroMateria(codigo: codigo, semestre: semestre, aprobada: aprobada);
       } else {
-        _registros.add(RegistroMateria(
-            codigo: codigo, semestre: semestre, aprobada: aprobada));
+        _registros.add(
+            RegistroMateria(codigo: codigo, semestre: semestre, aprobada: aprobada));
       }
+      // Recalcular el cache DESPUES de modificar _registros
+      _recalcularAprobadas();
     });
   }
 
   void _quitarRegistro(String codigo, int semestre) {
-    setState(() => _registros.removeWhere(
-        (r) => r.codigo == codigo && r.semestre == semestre));
+    setState(() {
+      _registros.removeWhere((r) => r.codigo == codigo && r.semestre == semestre);
+      _recalcularAprobadas();
+    });
   }
 
-  List<Materia> _buscarMaterias(String query, {int? excluirSemestre}) {
+  List<Materia> _buscarMaterias(String query,
+      {int? excluirSemestre, Set<String>? aprobadas}) {
     if (query.trim().isEmpty) return [];
     final q = _norm(query);
     return _todasLasMateriasYElectivas.where((m) {
+      if (excluirSemestre != null && _fueRegistrada(m.codigo, excluirSemestre))
+        return false;
       if (excluirSemestre != null &&
-          _fueRegistrada(m.codigo, excluirSemestre)) return false;
+          !_prerrequisitosCumplidos(m.codigo, excluirSemestre)) {
+        return false;
+      }
+      if (aprobadas != null &&
+          m.prerrequisitos.isNotEmpty &&
+          !m.prerrequisitos.every((p) => aprobadas.contains(p))) {
+        return false;
+      }
+      // No mostrar materias de la malla cuyo nivel sea <= al semestre actual.
+      // Solo se pueden adelantar materias de nivel estrictamente mayor.
+      // Esto evita buscar E02A (nivel 4) en semestre 3 aunque E01A ya este aprobada.
+      if (excluirSemestre != null) {
+        final matMalla = [
+          ...widget.programa.materias,
+          ...?widget.programaSecundario?.materias
+        ].where((mat) => mat.codigo == m.codigo).firstOrNull;
+        if (matMalla != null && matMalla.nivel <= excluirSemestre) return false;
+      }
       return _norm(m.nombre).contains(q) || _norm(m.codigo).contains(q);
     }).toList();
   }
 
-Future<void> _irAPlanificacion() async {
-  setState(() => _isGeneratingPlan = true);
-
-  try {
-    final homologacionesList = _homologacionesExternas.map((h) => {
-      'codigo_materia': h.codigoMateria,
-      'nombre_programa': h.nombrePrograma,
-    }).toList();
-
-    final response = await _apiService.planificar(
-      programaPrincipal: widget.programa.codigo,
-      programaSecundario: widget.programaSecundario?.codigo,
-      aprobadas: _aprobadas.toList(),
-      nivelesInglesHomologados: _inglesHomologados.toList(),
-      promedio: _promedio,
-      semestresCursados: _semestresCursados,
-      homologacionesExternas: homologacionesList,
-      practicaUnica: _practicaUnica,
-    );
-
-    final planResponse = PlanResponse.fromJson(response);
-
-    if (mounted) {
-      setState(() => _isGeneratingPlan = false);
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => PantallaPlanificacion(
-            planResponse: planResponse,
-            programaPrincipal: widget.programa,
-            programaSecundario: widget.programaSecundario,
-            token: widget.token,
-            userData: widget.userData,
-            // Datos necesarios para guardar el plan con nombre personalizado
-            planData: response,
-            semestresCursados: _semestresCursados,
-            promedio: _promedio,
-            materiasAprobadas: _aprobadas.toList(),
-            homologaciones: homologacionesList,
-          ),
-        ),
-      );
+  Future<void> _irAPlanificacion() async {
+    if (_haySemestresExcedidos) {
+      final semestres = _semestresExcedidos.join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Corrige los semestres $semestres: superan el limite de creditos permitido.'),
+        backgroundColor: const Color(0xFFFF6B6B),
+        duration: const Duration(seconds: 4),
+      ));
+      return;
     }
-  } catch (e) {
-    setState(() => _isGeneratingPlan = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error al generar el plan: ${e.toString().replaceAll('Exception: ', '')}'),
+
+    setState(() => _isGeneratingPlan = true);
+    try {
+      final homologacionesList = _homologacionesExternas
+          .map((h) => {
+                'codigo_materia': h.codigoMateria,
+                'nombre_programa': h.nombrePrograma,
+              })
+          .toList();
+
+      final respuesta = await _servicioApi.planificar(
+        token: widget.token,
+        programaPrincipal: widget.programa.codigo,
+        programaSecundario: widget.programaSecundario?.codigo,
+        aprobadas: _aprobadas.toList(),
+        nivelesInglesHomologados: _inglesHomologados.toList(),
+        promedio: _promedio,
+        semestresCursados: _semestresCursados,
+        homologacionesExternas: homologacionesList,
+        practicaUnica: _practicaUnica,
+      );
+
+      final respuestaPlan = RespuestaPlan.fromJson(respuesta);
+
+      if (mounted) {
+        setState(() => _isGeneratingPlan = false);
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PantallaPlanificacion(
+              respuestaPlan: respuestaPlan,
+              programaPrincipal: widget.programa,
+              programaSecundario: widget.programaSecundario,
+              token: widget.token,
+              datosUsuario: widget.datosUsuario,
+              datosPlan: respuesta,
+              semestresCursados: _semestresCursados,
+              promedio: _promedio,
+              materiasAprobadas: _aprobadas.toList(),
+              homologaciones: homologacionesList,
+            ),
+          ),
+        );
+      }
+    } on SesionExpiradaException {
+      if (mounted) {
+        setState(() => _isGeneratingPlan = false);
+        await SesionHelper.manejarSesionExpirada(context);
+      }
+    } catch (e) {
+      setState(() => _isGeneratingPlan = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Error al generar el plan: ${e.toString().replaceAll('Exception: ', '')}'),
         backgroundColor: Colors.red,
         duration: const Duration(seconds: 4),
-      ),
-    );
+      ));
+    }
   }
-}
 
-  // ── Build ────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2FF),
-          drawer: DrawerMenu(  // ← AGREGAR
-      token: widget.token,
-      userData: widget.userData,
-    ),
+      drawer: MenuLateral(token: widget.token, datosUsuario: widget.datosUsuario),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A1FC8),
         foregroundColor: Colors.white,
@@ -367,9 +576,7 @@ Future<void> _irAPlanificacion() async {
                                 : completado
                                     ? const Color(0xFF4ADE00)
                                     : const Color(0xFF6B7280),
-                            fontWeight: activo
-                                ? FontWeight.bold
-                                : FontWeight.normal,
+                            fontWeight: activo ? FontWeight.bold : FontWeight.normal,
                           )),
                     ],
                   ),
@@ -389,6 +596,18 @@ Future<void> _irAPlanificacion() async {
     );
   }
 
+
+
+
+
+
+
+
+
+
+
+
+
   Widget _buildPaso() {
     switch (_paso) {
       case 0: return _buildPromedio();
@@ -399,11 +618,11 @@ Future<void> _irAPlanificacion() async {
     }
   }
 
-  // ── PASO 0: Promedio ─────────────────────────────────────
+  // ── PASO 0: Promedio ──────────────────────────────────────
   Widget _buildPromedio() {
     final maxCr = _promedio >= 4.0 ? 20 : 18;
     final ok = _promedio >= 4.0;
-    // Nota invalida: menor a 3.0. No permite avanzar al siguiente paso.
+    // Nota invalida: menor a 3.0 o mayor a 5.0. No permite avanzar.
     final invalida = _promedioIngresado && (_promedio < 3.0 || _promedio > 5.0);
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -422,85 +641,77 @@ Future<void> _irAPlanificacion() async {
           const SizedBox(height: 24),
           TextField(
             controller: _ctrlPromedio,
-            keyboardType:
-                TextInputType.number,
-            maxLength: 4,   // Evitamos problema con double al redondear con muchos 9s en 2.9...
-            inputFormatters: [
-              FormatoDecimal(),
-            ],
+            keyboardType: TextInputType.number,
+            // maxLength evita que 2.9999... se redondee a 3.0 por precision float
+            maxLength: 4,
+            inputFormatters: [FormatoDecimal()],
             decoration: _inputDeco('Promedio (ej. 3.8)',
                 icon: Icons.bar_chart_rounded).copyWith(counterText: ''),
             onChanged: (valor) {
               setState(() {
                 _promedioIngresado = valor.trim().isNotEmpty;
-
                 final p = double.tryParse(valor);
-
-                if (p != null) {
-                  _promedio = double.parse(p.toStringAsFixed(2));
-                } else {
-                  _promedio = 0.0;
-                }
+                _promedio = p != null ? double.parse(p.toStringAsFixed(2)) : 0.0;
               });
             },
           ),
           const SizedBox(height: 20),
           if (_promedioIngresado)
             AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: invalida
-                  ? const Color(0xFFFF6B6B).withOpacity(0.10)
-                  : ok
-                      ? const Color(0xFF4ADE00).withOpacity(0.10)
-                      : const Color(0xFFFBBF24).withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
+              duration: const Duration(milliseconds: 300),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
                 color: invalida
-                    ? const Color(0xFFFF6B6B)
+                    ? const Color(0xFFFF6B6B).withOpacity(0.10)
                     : ok
-                        ? const Color(0xFF4ADE00)
-                        : const Color(0xFFFBBF24),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  invalida
-                      ? Icons.cancel_rounded
-                      : ok
-                          ? Icons.check_circle_rounded
-                          : Icons.info_rounded,
+                        ? const Color(0xFF4ADE00).withOpacity(0.10)
+                        : const Color(0xFFFBBF24).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
                   color: invalida
-                      ? const Color(0xFF991B1B)
+                      ? const Color(0xFFFF6B6B)
                       : ok
-                          ? const Color(0xFF166534)
-                          : const Color(0xFF92400E),
+                          ? const Color(0xFF4ADE00)
+                          : const Color(0xFFFBBF24),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
+              ),
+              child: Row(
+                children: [
+                  Icon(
                     invalida
-                        ? 'Nota invalida. El promedio debe estar entre 3.0 y 5.0. Por favor revisa de nuevo.'
+                        ? Icons.cancel_rounded
                         : ok
-                            ? 'Promedio >= 4.0 → Maximo $maxCr creditos por semestre'
-                            : 'Promedio < 4.0 → Maximo $maxCr creditos por semestre',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: invalida
-                          ? const Color(0xFF991B1B)
+                            ? Icons.check_circle_rounded
+                            : Icons.info_rounded,
+                    color: invalida
+                        ? const Color(0xFF991B1B)
+                        : ok
+                            ? const Color(0xFF166534)
+                            : const Color(0xFF92400E),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      invalida
+                          ? 'Nota invalida. El promedio debe estar entre 3.0 y 5.0. Por favor revisa de nuevo.'
                           : ok
-                              ? const Color(0xFF166534)
-                              : const Color(0xFF92400E),
+                              ? 'Promedio >= 4.0 → Maximo $maxCr creditos por semestre'
+                              : 'Promedio < 4.0 → Maximo $maxCr creditos por semestre',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: invalida
+                            ? const Color(0xFF991B1B)
+                            : ok
+                                ? const Color(0xFF166534)
+                                : const Color(0xFF92400E),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
           const SizedBox(height: 32),
-          // El boton se deshabilita si no se ha ingresado promedio o es invalido (<3.0)
+          // El boton se deshabilita si no se ha ingresado promedio o es invalido
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -512,8 +723,7 @@ Future<void> _irAPlanificacion() async {
                 backgroundColor: const Color(0xFF1A1FC8),
                 disabledBackgroundColor: const Color(0xFF1A1FC8).withOpacity(0.4),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 elevation: 0,
               ),
               child: const Text('Siguiente',
@@ -525,12 +735,11 @@ Future<void> _irAPlanificacion() async {
     );
   }
 
-  // ── PASO 1: Inglés ───────────────────────────────────────
+  // ── PASO 1: Inglés ────────────────────────────────────────
   Widget _buildIngles() {
     const nombres = [
       'Lengua Extranjera I', 'Lengua Extranjera II',
-      'Lengua Extranjera III', 'Lengua Extranjera IV',
-      'Lengua Extranjera V',
+      'Lengua Extranjera III', 'Lengua Extranjera IV', 'Lengua Extranjera V',
     ];
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -539,9 +748,7 @@ Future<void> _irAPlanificacion() async {
         children: [
           const Text('Niveles de inglés homologados',
               style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E))),
+                  fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A1A2E))),
           const SizedBox(height: 8),
           const Text(
               'Marca los niveles que ya tienes homologados por examen. '
@@ -554,29 +761,24 @@ Future<void> _irAPlanificacion() async {
             return GestureDetector(
               onTap: () => setState(() {
                 if (marcado) {
-                  for (int n = nivel; n <= 5; n++) {
-                    _inglesHomologados.remove(n);
-                  }
+                  for (int n = nivel; n <= 5; n++) _inglesHomologados.remove(n);
                 } else {
-                  for (int n = 1; n <= nivel; n++) {
-                    _inglesHomologados.add(n);
-                  }
+                  for (int n = 1; n <= nivel; n++) _inglesHomologados.add(n);
                 }
+                // Ingles homologado afecta las aprobadas externas
+                _recalcularAprobadas();
               }),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
                 margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
                   color: marcado
                       ? const Color(0xFF1A1FC8).withOpacity(0.08)
                       : Colors.white,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: marcado
-                        ? const Color(0xFF1A1FC8)
-                        : const Color(0xFFE5E7EB),
+                    color: marcado ? const Color(0xFF1A1FC8) : const Color(0xFFE5E7EB),
                     width: marcado ? 1.5 : 1,
                   ),
                 ),
@@ -594,9 +796,7 @@ Future<void> _irAPlanificacion() async {
                         child: Text('$nivel',
                             style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: marcado
-                                    ? Colors.white
-                                    : const Color(0xFF6B7280))),
+                                color: marcado ? Colors.white : const Color(0xFF6B7280))),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -604,9 +804,7 @@ Future<void> _irAPlanificacion() async {
                       child: Text(nombres[i],
                           style: TextStyle(
                             fontSize: 14,
-                            fontWeight: marcado
-                                ? FontWeight.w600
-                                : FontWeight.normal,
+                            fontWeight: marcado ? FontWeight.w600 : FontWeight.normal,
                             color: marcado
                                 ? const Color(0xFF1A1FC8)
                                 : const Color(0xFF374151),
@@ -631,27 +829,23 @@ Future<void> _irAPlanificacion() async {
                 '${_inglesHomologados.length} nivel(es) homologado(s). '
                 'En tu historial aparecerán marcados automáticamente '
                 'y no tendrás que registrarlos.',
-                style: const TextStyle(
-                    fontSize: 12, color: Color(0xFF1A1FC8)),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF1A1FC8)),
               ),
             ),
           const SizedBox(height: 24),
           Row(children: [
             _btnSecundario(() => setState(() => _paso = 0)),
             const SizedBox(width: 12),
-            Expanded(
-                child: _btnPrimario(
-                    'Siguiente', () => setState(() => _paso = 2))),
+            Expanded(child: _btnPrimario('Siguiente', () => setState(() => _paso = 2))),
           ]),
         ],
       ),
     );
   }
 
-  // ── PASO 2: Homologaciones externas ─────────────────────
+  // ── PASO 2: Homologaciones externas ──────────────────────
   Widget _buildHomologExternas() {
     final resultados = _buscarMaterias(_busqHomolog);
-
     return Column(
       children: [
         Padding(
@@ -661,9 +855,7 @@ Future<void> _irAPlanificacion() async {
             children: [
               const Text('Homologaciones externas',
                   style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A1A2E))),
+                      fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A1A2E))),
               const SizedBox(height: 8),
               const Text(
                   'Busca materias homologadas mediante Talento Tech, '
@@ -684,23 +876,17 @@ Future<void> _irAPlanificacion() async {
                             creditos: 0,
                             nivel: 0));
                     return Chip(
-                      label: Text(
-                        '${mat.nombre} · ${h.nombrePrograma}',
-                        style: const TextStyle(
-                            fontSize: 11, color: Color(0xFF7C3AED)),
-                      ),
-                      backgroundColor:
-                          const Color(0xFF7C3AED).withOpacity(0.10),
-                      side: const BorderSide(
-                          color: Color(0xFF7C3AED), width: 0.8),
+                      label: Text('${mat.nombre} · ${h.nombrePrograma}',
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF7C3AED))),
+                      backgroundColor: const Color(0xFF7C3AED).withOpacity(0.10),
+                      side: const BorderSide(color: Color(0xFF7C3AED), width: 0.8),
                       deleteIcon: const Icon(Icons.close,
                           size: 14, color: Color(0xFF7C3AED)),
-                      onDeleted: () => setState(() =>
-                          _homologacionesExternas.removeWhere(
-                              (x) => x.codigoMateria == h.codigoMateria)),
+                      onDeleted: () => setState(() => _homologacionesExternas
+                          .removeWhere((x) => x.codigoMateria == h.codigoMateria)),
                       padding: const EdgeInsets.symmetric(horizontal: 4),
-                      materialTapTargetSize:
-                          MaterialTapTargetSize.shrinkWrap,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     );
                   }).toList(),
                 ),
@@ -723,50 +909,45 @@ Future<void> _irAPlanificacion() async {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: const [
-                      Icon(Icons.verified_outlined,
-                          size: 48, color: Color(0xFFD1D5DB)),
+                      Icon(Icons.verified_outlined, size: 48, color: Color(0xFFD1D5DB)),
                       SizedBox(height: 8),
                       Text('Escribe para buscar materias',
-                          style:
-                              TextStyle(color: Color(0xFF9CA3AF))),
+                          style: TextStyle(color: Color(0xFF9CA3AF))),
                     ],
                   ),
                 )
               : resultados.isEmpty
                   ? const Center(
                       child: Text('No se encontraron materias',
-                          style:
-                              TextStyle(color: Color(0xFF9CA3AF))))
+                          style: TextStyle(color: Color(0xFF9CA3AF))))
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      itemCount:
-                          resultados.length > 6 ? 6 : resultados.length,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      itemCount: resultados.length > 6 ? 6 : resultados.length,
                       itemBuilder: (_, i) {
                         final m = resultados[i];
-                        final yaHom =
-                            _estaHomologadaExterna(m.codigo);
+                        final yaHom = _estaHomologadaExterna(m.codigo);
                         return _CardHomologacion(
                           materia: m,
                           yaAgregada: yaHom,
                           onAgregar: (prog) {
                             setState(() {
-                              _homologacionesExternas.removeWhere(
-                                  (h) => h.codigoMateria == m.codigo);
-                              _homologacionesExternas.add(
-                                HomologacionExterna(
-                                  codigoMateria: m.codigo,
-                                  nombrePrograma: prog,
-                                ),
-                              );
+                              _homologacionesExternas
+                                  .removeWhere((h) => h.codigoMateria == m.codigo);
+                              _homologacionesExternas.add(HomologacionExterna(
+                                codigoMateria: m.codigo,
+                                nombrePrograma: prog,
+                              ));
                               _busqHomolog = '';
                               _ctrlHomolog.clear();
+                              // Homologaciones externas afectan las aprobadas
+                              _recalcularAprobadas();
                             });
                           },
-                          onQuitar: () => setState(() =>
-                              _homologacionesExternas.removeWhere(
-                                  (h) =>
-                                      h.codigoMateria == m.codigo)),
+                          onQuitar: () => setState(() {
+                            _homologacionesExternas
+                                .removeWhere((h) => h.codigoMateria == m.codigo);
+                            _recalcularAprobadas();
+                          }),
                         );
                       },
                     ),
@@ -777,202 +958,285 @@ Future<void> _irAPlanificacion() async {
             _btnSecundario(() => setState(() => _paso = 1)),
             const SizedBox(width: 12),
             Expanded(
-                child: _btnPrimario(
-                    'Ir al historial',
-                    () => setState(() => _paso = 3))),
+                child: _btnPrimario('Ir al historial', () => setState(() => _paso = 3))),
           ]),
         ),
       ],
     );
   }
 
-  // ── PASO 3: Historial ────────────────────────────────────
+  // ── PASO 3: Historial ─────────────────────────────────────
   Widget _buildHistorial() {
-  return Column(
-    children: [
-      Container(
-        color: const Color(0xFF1A1FC8),
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-        child: Column(
-          children: [
-            Row(children: [
-              _stat('Aprobadas', '${_todasAprobadas.length}'),
-              _divV(),
-              _stat('Créditos', '$_creditosAprobados'),
-              _divV(),
-              _stat('Avance', '${(_avance * 100).toStringAsFixed(0)}%'),
-              _divV(),
-              _stat('Semestres', '$_semestresCursados cursados'),
-            ]),
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: LinearProgressIndicator(
-                value: _avance,
-                minHeight: 8,
-                backgroundColor: const Color(0xFF2D33D4),
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                    Color(0xFF4ADE00)),
+    final semestresExcedidos = _semestresExcedidos;
+    final hayExcedidos = semestresExcedidos.isNotEmpty;
+
+    return Column(
+      children: [
+        Container(
+          color: const Color(0xFF1A1FC8),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+          child: Column(
+            children: [
+              Row(children: [
+                _stat('Aprobadas', '${_todasAprobadas.length}'),
+                _divV(),
+                _stat('Créditos', '$_creditosAprobados'),
+                _divV(),
+                _stat('Avance', '${(_avance * 100).toStringAsFixed(0)}%'),
+                _divV(),
+                _stat('Semestres', '$_semestresCursados cursados'),
+              ]),
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: _avance,
+                  minHeight: 8,
+                  backgroundColor: const Color(0xFF2D33D4),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF4ADE00)),
+                ),
               ),
-            ),
-          ],
+              if (hayExcedidos) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF6B6B).withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFFF6B6B)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.warning_rounded,
+                          color: Color(0xFFFFD1D1), size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Semestres ${semestresExcedidos.join(', ')} superan el limite de creditos permitido. Quita materias para generar el plan.',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-      ),
-      Container(
-        color: const Color(0xFFEEF0FF),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: const Text(
-          'Registra qué materias cursaste en cada semestre. '
-          'Los ingleses homologados y las homologaciones externas '
-          'ya aparecen marcados automáticamente.',
-          style: TextStyle(fontSize: 11, color: Color(0xFF374151)),
+        Container(
+          color: const Color(0xFFEEF0FF),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: const Text(
+            'Registra qué materias cursaste en cada semestre. '
+            'Los ingleses homologados y las homologaciones externas '
+            'ya aparecen marcados automáticamente.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF374151)),
+          ),
         ),
-      ),
-      Expanded(
-        child: ListView.builder(
-          padding: const EdgeInsets.all(12),
-          itemCount: _semestresCursados,
-          itemBuilder: (_, i) => _buildSemestre(i + 1),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: _semestresCursados,
+            itemBuilder: (_, i) => _buildSemestre(i + 1),
+          ),
         ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-        child: Row(
-          children: [
-            if (_semestresCursados > 1)
-              Padding(
-                padding: const EdgeInsets.only(right: 10),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Row(
+            children: [
+              if (_semestresCursados > 1)
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: SizedBox(
+                    height: 48,
+                    width: 48,
+                    child: OutlinedButton(
+                      onPressed: () => setState(() => _semestresCursados--),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFFF6B6B),
+                        side: const BorderSide(color: Color(0xFFFF6B6B)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        padding: EdgeInsets.zero,
+                      ),
+                      child: const Icon(Icons.remove_rounded, size: 20),
+                    ),
+                  ),
+                ),
+              Expanded(
                 child: SizedBox(
                   height: 48,
-                  width: 48,
-                  child: OutlinedButton(
-                    onPressed: () => setState(() => _semestresCursados--),
+                  child: OutlinedButton.icon(
+                    onPressed: _semestresCursados < _maxSemestresCursados
+                        ? () {
+                            setState(() => _semestresCursados++);
+                            WidgetsBinding.instance.addPostFrameCallback((_) =>
+                                setState(() => _semestreExpandido = _semestresCursados));
+                          }
+                        : null,
+                    icon: const Icon(Icons.add_rounded, size: 20),
+                    label: Text(
+                      _semestresCursados < _maxSemestresCursados
+                          ? 'Agregar semestre ${_semestresCursados + 1}'
+                          : 'Máximo $_maxSemestresCursados semestres',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFFF6B6B),
-                      side: const BorderSide(color: Color(0xFFFF6B6B)),
+                      foregroundColor: const Color(0xFF1A1FC8),
+                      side: const BorderSide(color: Color(0xFF1A1FC8), width: 1.5),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
-                      padding: EdgeInsets.zero,
+                      backgroundColor: const Color(0xFF1A1FC8).withOpacity(0.05),
                     ),
-                    child: const Icon(Icons.remove_rounded, size: 20),
                   ),
                 ),
               ),
-            Expanded(
-              child: SizedBox(
-                height: 48,
-                child: OutlinedButton.icon(
-                  onPressed: _semestresCursados < 10
-                      ? () {
-                          setState(() => _semestresCursados++);
-                          WidgetsBinding.instance.addPostFrameCallback(
-                              (_) => setState(() =>
-                                  _semestreExpandido = _semestresCursados));
-                        }
-                      : null,
-                  icon: const Icon(Icons.add_rounded, size: 20),
-                  label: Text(
-                    _semestresCursados < 10
-                        ? 'Agregar semestre ${_semestresCursados + 1}'
-                        : 'Máximo 10 semestres',
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF1A1FC8),
-                    side: const BorderSide(
-                        color: Color(0xFF1A1FC8), width: 1.5),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    backgroundColor:
-                        const Color(0xFF1A1FC8).withOpacity(0.05),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: SwitchListTile(
+            title: const Text('Práctica profesional única',
+                style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: const Text('Una sola práctica que sirve para ambos programas'),
+            value: _practicaUnica,
+            onChanged: (value) => setState(() => _practicaUnica = value),
+            activeColor: const Color(0xFF1A1FC8),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Row(
+            children: [
+              _btnSecundario(() => setState(() => _paso = 2)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: (_isGeneratingPlan || hayExcedidos)
+                        ? null
+                        : _irAPlanificacion,
+                    icon: _isGeneratingPlan
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.black))
+                        : const Icon(Icons.auto_awesome_rounded, color: Colors.black),
+                    label: Text(
+                      _isGeneratingPlan
+                          ? 'Generando plan...'
+                          : hayExcedidos
+                              ? 'Corrige creditos excedidos'
+                              : 'Generar mi plan',
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4ADE00),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-      // ─── SWITCH PARA PRÁCTICA ÚNICA/DOBLE ─────────────────
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: SwitchListTile(
-          title: const Text('Práctica profesional única',
-              style: TextStyle(fontWeight: FontWeight.w500)),
-          subtitle: const Text('Una sola práctica que sirve para ambos programas'),
-          value: _practicaUnica,
-          onChanged: (value) {
-            setState(() {
-              _practicaUnica = value;
-            });
-          },
-          activeColor: const Color(0xFF1A1FC8),
-          contentPadding: EdgeInsets.zero,
-        ),
-      ),
-      const SizedBox(height: 8),
-      // ─── BOTONES FINALES ───────────────────────────────────
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: Row(
-          children: [
-            _btnSecundario(() => setState(() => _paso = 2)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: SizedBox(
-                height: 52,
-                child: ElevatedButton.icon(
-                  onPressed: _isGeneratingPlan ? null : _irAPlanificacion,
-                  icon: _isGeneratingPlan
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.black,
-                          ),
-                        )
-                      : const Icon(Icons.auto_awesome_rounded,
-                          color: Colors.black),
-                  label: Text(
-                    _isGeneratingPlan ? 'Generando plan...' : 'Generar mi plan',
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF4ADE00),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ],
-  );
-}
+      ],
+    );
+  }
+
   Widget _buildSemestre(int semestre) {
     final esPrimero = semestre == 1;
     final expandido = _semestreExpandido == semestre;
+    final creditosSemestre = _creditosSemestre(semestre);
+    final creditosMax = _maxCreditosParaSemestre(semestre);
+    final excedeCreditos = creditosSemestre > creditosMax;
 
+    // Aprobadas ANTES de este semestre — no incluye lo registrado en el mismo semestre.
+    // Se usa para filtrar prereqs al inicio del semestre, no durante el redibujado.
+    final aprobadasAntesDeSemestre =
+        _aprobadasValidasAntesDeSemestre(semestre);
+
+    // Materias del nivel filtradas por:
+    // - ingles homologado (no aparece)
+    // - prereqs no cumplidos al inicio del semestre (no aparece)
     final materiasDelNivel = _materiasDelNivel(semestre)
         .where((m) => !_estaInglesHomologado(m.codigo))
+        .where((m) => _prerrequisitosCumplidos(m.codigo, semestre))
         .toList();
 
+    // Materias perdidas en semestres anteriores que deben reaparecer.
+    // Se verifica que sus prereqs esten cumplidos Y que no haya una version
+    // posterior aprobada sin haber aprobado esta (ej. no vale aprobar E02A
+    // si E01A esta perdida, E01A debe reaparecer como pendiente)
+    final perdidasAntes = _registros
+        .where((r) => r.semestre < semestre && !r.aprobada)
+        .map((r) => r.codigo)
+        .toSet();
+    for (final codigo in perdidasAntes) {
+      final yaAprobada = _registros.any(
+          (r) => r.codigo == codigo && r.semestre < semestre && r.aprobada);
+      if (!yaAprobada && !materiasDelNivel.any((m) => m.codigo == codigo)) {
+        final mat = _materiaUnificada(codigo) ??
+            Materia(codigo: codigo, nombre: codigo, creditos: 0, nivel: semestre);
+        if (_prerrequisitosCumplidos(codigo, semestre)) {
+          materiasDelNivel.add(mat);
+        }
+      }
+    }
+
+    // Materias de nivel < semestre cuyos prereqs recien se cumplieron
+    // (ej. Dinamica nivel 4 aparece en sem 5 si Estatica se aprobo en sem 4)
+    // Solo programa principal para no mezclar con el secundario
+    for (final mat in widget.programa.materias) {
+      if (mat.nivel >= semestre) continue;
+      if (materiasDelNivel.any((m) => m.codigo == mat.codigo)) continue;
+      if (_estaInglesHomologado(mat.codigo)) continue;
+      if (_registros.any((r) => r.codigo == mat.codigo)) continue;
+      if (_prerrequisitosCumplidos(mat.codigo, semestre)) {
+        materiasDelNivel.add(mat);
+      }
+    }
+
+    // Agregar ingles ajustado al semestre correspondiente.
+    // Se calcula dinamicamente para que el siguiente ingles no aparezca
+    // hasta que el anterior este aprobado.
+    final inglesAjustado = _inglesNivelAjustadoParaSemestre(semestre, aprobadasAntesDeSemestre);
+    for (final entry in inglesAjustado.entries) {
+      if (entry.value == semestre) {
+        final mat = widget.programa.materias.firstWhere(
+          (m) => m.codigo == entry.key,
+          orElse: () =>
+              widget.programaSecundario?.materias.firstWhere(
+                (m) => m.codigo == entry.key,
+                orElse: () => Materia(
+                    codigo: entry.key, nombre: entry.key, creditos: 2, nivel: semestre),
+              ) ??
+              Materia(codigo: entry.key, nombre: entry.key, creditos: 2, nivel: semestre),
+        );
+        if (!materiasDelNivel.any((m) => m.codigo == mat.codigo)) {
+          materiasDelNivel.add(mat);
+        }
+      }
+    }
+
     final registros = _registrosDeSemestre(semestre);
-    final aprobCount = materiasDelNivel
-        .where((m) => _estaAprobada(m.codigo) ||
-            _fueRegistrada(m.codigo, semestre) &&
-                _registros.any((r) =>
-                    r.codigo == m.codigo &&
-                    r.semestre == semestre &&
-                    r.aprobada))
-        .length;
+    // Cuenta aprobadas de malla + adicionales del semestre
+    final aprobCount = registros.where((r) => r.aprobada).length;
     final totalReg = registros.length;
 
     _ctrlAdicional.putIfAbsent(semestre, () => TextEditingController());
@@ -980,8 +1244,8 @@ Future<void> _irAPlanificacion() async {
     if (esPrimero) {
       for (final m in materiasDelNivel) {
         if (!_fueRegistrada(m.codigo, 1)) {
-          WidgetsBinding.instance.addPostFrameCallback(
-              (_) => _registrar(m.codigo, 1, true));
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _registrar(m.codigo, 1, true));
         }
       }
     }
@@ -992,22 +1256,22 @@ Future<void> _irAPlanificacion() async {
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: aprobCount > 0
-              ? const Color(0xFF4ADE00)
-              : const Color(0xFFE5E7EB),
-          width: aprobCount > 0 ? 1.5 : 1,
+          color: excedeCreditos
+              ? const Color(0xFFFF6B6B)
+              : aprobCount > 0
+                  ? const Color(0xFF4ADE00)
+                  : const Color(0xFFE5E7EB),
+          width: excedeCreditos || aprobCount > 0 ? 1.5 : 1,
         ),
       ),
       child: Column(
         children: [
           InkWell(
-            borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14)),
-            onTap: () => setState(() =>
-                _semestreExpandido = expandido ? null : semestre),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+            onTap: () => setState(
+                () => _semestreExpandido = expandido ? null : semestre),
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               child: Row(
                 children: [
                   Container(
@@ -1043,13 +1307,25 @@ Future<void> _irAPlanificacion() async {
                             const SizedBox(width: 6),
                             _pill('Auto', const Color(0xFF1A1FC8)),
                           ],
+                          if (excedeCreditos) ...[
+                            const SizedBox(width: 6),
+                            _pill('Excede', const Color(0xFFFF6B6B)),
+                          ],
                         ]),
                         Text(
                           totalReg == 0
                               ? 'Sin materias registradas'
-                              : '$aprobCount aprobadas · $totalReg cursadas',
-                          style: const TextStyle(
-                              fontSize: 11, color: Color(0xFF6B7280)),
+                              : excedeCreditos
+                                  ? '$aprobCount aprobadas · $totalReg cursadas · $creditosSemestre/$creditosMax cr'
+                                  : '$aprobCount aprobadas · $totalReg cursadas · $creditosSemestre cr',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: excedeCreditos
+                                  ? const Color(0xFFFF6B6B)
+                                  : const Color(0xFF6B7280),
+                              fontWeight: excedeCreditos
+                                  ? FontWeight.w700
+                                  : FontWeight.normal),
                         ),
                       ],
                     ),
@@ -1065,7 +1341,6 @@ Future<void> _irAPlanificacion() async {
               ),
             ),
           ),
-
           if (expandido) ...[
             if (materiasDelNivel.isNotEmpty) _seccion('Materias de la malla'),
             ...materiasDelNivel.map((m) {
@@ -1074,13 +1349,11 @@ Future<void> _irAPlanificacion() async {
                   orElse: () =>
                       RegistroMateria(codigo: '', semestre: 0, aprobada: false));
               final tieneReg = reg.codigo.isNotEmpty;
-
-              final aprobadaAntes = semestre > 1 && (
-                _registros.any((r) =>
-                    r.codigo == m.codigo &&
-                    r.semestre < semestre &&
-                    r.aprobada)
-              );
+              final aprobadaAntes = semestre > 1 &&
+                  _registros.any((r) =>
+                      r.codigo == m.codigo &&
+                      r.semestre < semestre &&
+                      r.aprobada);
               final homologadaExt = _estaHomologadaExterna(m.codigo);
 
               return _FilaMateria(
@@ -1097,29 +1370,24 @@ Future<void> _irAPlanificacion() async {
                 bloqueada: esPrimero || aprobadaAntes || homologadaExt,
                 etiquetaExtra: homologadaExt
                     ? _homologacionesExternas
-                        .firstWhere(
-                            (h) => h.codigoMateria == m.codigo)
+                        .firstWhere((h) => h.codigoMateria == m.codigo)
                         .nombrePrograma
                     : null,
-                onAprobada:
-                    (esPrimero || aprobadaAntes || homologadaExt)
-                        ? null
-                        : () => _registrar(m.codigo, semestre, true),
-                onPerdida:
-                    (esPrimero || aprobadaAntes || homologadaExt)
-                        ? null
-                        : () => _registrar(m.codigo, semestre, false),
+                onAprobada: (esPrimero || aprobadaAntes || homologadaExt)
+                    ? null
+                    : () => _registrar(m.codigo, semestre, true),
+                onPerdida: (esPrimero || aprobadaAntes || homologadaExt)
+                    ? null
+                    : () => _registrar(m.codigo, semestre, false),
                 onQuitar:
                     (esPrimero || aprobadaAntes || homologadaExt || !tieneReg)
                         ? null
                         : () => _quitarRegistro(m.codigo, semestre),
               );
             }),
-
             () {
               final adicionales = _registrosDeSemestre(semestre)
-                  .where((r) =>
-                      !materiasDelNivel.any((m) => m.codigo == r.codigo))
+                  .where((r) => !materiasDelNivel.any((m) => m.codigo == r.codigo))
                   .toList();
               if (adicionales.isEmpty) return const SizedBox.shrink();
               return Column(
@@ -1127,32 +1395,23 @@ Future<void> _irAPlanificacion() async {
                 children: [
                   _seccion('Materias adicionales'),
                   ...adicionales.map((r) {
-                    final mat = _todasLasMaterias.firstWhere(
+                    final mat = _todasLasMateriasYElectivas.firstWhere(
                         (m) => m.codigo == r.codigo,
                         orElse: () => Materia(
-                            codigo: r.codigo,
-                            nombre: r.codigo,
-                            creditos: 0,
-                            nivel: 0));
+                            codigo: r.codigo, nombre: r.codigo, creditos: 0, nivel: 0));
                     return _FilaMateria(
                       nombre: mat.nombre,
-                      estado: r.aprobada
-                          ? _Estado.aprobada
-                          : _Estado.perdida,
+                      estado: r.aprobada ? _Estado.aprobada : _Estado.perdida,
                       bloqueada: false,
-                      onAprobada: () =>
-                          _registrar(mat.codigo, semestre, true),
-                      onPerdida: () =>
-                          _registrar(mat.codigo, semestre, false),
-                      onQuitar: () =>
-                          _quitarRegistro(mat.codigo, semestre),
+                      onAprobada: () => _registrar(mat.codigo, semestre, true),
+                      onPerdida: () => _registrar(mat.codigo, semestre, false),
+                      onQuitar: () => _quitarRegistro(mat.codigo, semestre),
                     );
                   }),
                 ],
               );
             }(),
-
-            _buildBuscadorAdicionales(semestre),
+            _buildBuscadorAdicionales(semestre, aprobadasAntesDeSemestre),
             const SizedBox(height: 8),
           ],
         ],
@@ -1160,10 +1419,15 @@ Future<void> _irAPlanificacion() async {
     );
   }
 
-  Widget _buildBuscadorAdicionales(int semestre) {
+  Widget _buildBuscadorAdicionales(int semestre, Set<String> aprobadas) {
     final mostrar = _mostrarAdicional[semestre] ?? false;
     final query = _busqAdicional[semestre] ?? '';
-    final resultados = _buscarMaterias(query, excluirSemestre: semestre);
+    final creditosUsados = _creditosSemestre(semestre);
+    final creditosMax = _maxCreditosParaSemestre(semestre);
+    final creditosDisponibles = creditosMax - creditosUsados;
+    final limiteAlcanzado = creditosDisponibles <= 0;
+    final resultados =
+        _buscarMaterias(query, excluirSemestre: semestre, aprobadas: aprobadas);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
@@ -1171,37 +1435,50 @@ Future<void> _irAPlanificacion() async {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           GestureDetector(
-            onTap: () =>
-                setState(() => _mostrarAdicional[semestre] = !mostrar),
+            // Si el limite de creditos fue alcanzado no se puede abrir el buscador
+            onTap: limiteAlcanzado
+                ? null
+                : () => setState(() => _mostrarAdicional[semestre] = !mostrar),
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: mostrar
-                    ? const Color(0xFF00D4FF).withOpacity(0.10)
-                    : const Color(0xFFF3F4F6),
+                color: limiteAlcanzado
+                    ? const Color(0xFFF3F4F6)
+                    : mostrar
+                        ? const Color(0xFF00D4FF).withOpacity(0.10)
+                        : const Color(0xFFF3F4F6),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                    color: mostrar
-                        ? const Color(0xFF00D4FF)
-                        : const Color(0xFFE5E7EB)),
+                    color: limiteAlcanzado
+                        ? const Color(0xFFE5E7EB)
+                        : mostrar
+                            ? const Color(0xFF00D4FF)
+                            : const Color(0xFFE5E7EB)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                      mostrar
-                          ? Icons.remove_rounded
-                          : Icons.add_rounded,
-                      size: 15,
-                      color: const Color(0xFF0E7490)),
+                    limiteAlcanzado
+                        ? Icons.block_rounded
+                        : mostrar
+                            ? Icons.remove_rounded
+                            : Icons.add_rounded,
+                    size: 15,
+                    color: limiteAlcanzado
+                        ? const Color(0xFF9CA3AF)
+                        : const Color(0xFF0E7490)),
                   const SizedBox(width: 6),
-                  const Text(
-                      '¿Diste materias adicionales este semestre?',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF0E7490),
-                          fontWeight: FontWeight.w500)),
+                  Text(
+                    limiteAlcanzado
+                        ? 'Limite de $creditosMax creditos alcanzado'
+                        : '¿Diste materias adicionales este semestre?',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: limiteAlcanzado
+                            ? const Color(0xFF9CA3AF)
+                            : const Color(0xFF0E7490),
+                        fontWeight: FontWeight.w500)),
                 ],
               ),
             ),
@@ -1213,38 +1490,46 @@ Future<void> _irAPlanificacion() async {
               decoration: _inputDeco(
                   'Busca por nombre (sin tildes también funciona)',
                   icon: Icons.search),
-              onChanged: (v) =>
-                  setState(() => _busqAdicional[semestre] = v),
+              onChanged: (v) => setState(() => _busqAdicional[semestre] = v),
             ),
             if (query.isNotEmpty)
-              ...resultados.take(5).map((m) => Container(
-                    margin: const EdgeInsets.only(top: 6),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(8),
-                      border:
-                          Border.all(color: const Color(0xFFE5E7EB)),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(m.nombre,
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFF1A1A2E))),
-                              Text('${m.creditos} cr',
-                                  style: const TextStyle(
-                                      fontSize: 11,
-                                      color: Color(0xFF9CA3AF))),
-                            ],
-                          ),
+              ...resultados.take(5).map((m) {
+                // Verificar si agregar esta materia excederia el limite de creditos
+                final excederia = creditosDisponibles < m.creditos;
+                return Container(
+                  margin: const EdgeInsets.only(top: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(m.nombre,
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: excederia
+                                        ? const Color(0xFF9CA3AF)
+                                        : const Color(0xFF1A1A2E))),
+                            Text(
+                              excederia
+                                  ? '${m.creditos} cr · excede el limite ($creditosDisponibles disponibles)'
+                                  : '${m.creditos} cr · quedan $creditosDisponibles disponibles',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: excederia
+                                      ? const Color(0xFFFF6B6B)
+                                      : const Color(0xFF9CA3AF))),
+                          ],
                         ),
+                      ),
+                      if (!excederia) ...[
                         _mini('Aprobé', const Color(0xFF4ADE00), () {
                           _registrar(m.codigo, semestre, true);
                           setState(() {
@@ -1263,14 +1548,15 @@ Future<void> _irAPlanificacion() async {
                           });
                         }),
                       ],
-                    ),
-                  )),
+                    ],
+                  ),
+                );
+              }),
             if (query.isNotEmpty && resultados.isEmpty)
               const Padding(
                 padding: EdgeInsets.only(top: 8),
                 child: Text('No se encontraron materias',
-                    style: TextStyle(
-                        fontSize: 12, color: Color(0xFF9CA3AF))),
+                    style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
               ),
           ],
         ],
@@ -1278,7 +1564,7 @@ Future<void> _irAPlanificacion() async {
     );
   }
 
-  // ── Widgets reutilizables ────────────────────────────────
+  // ── Widgets reutilizables ─────────────────────────────────
   Widget _btnPrimario(String label, VoidCallback onTap) => SizedBox(
         width: double.infinity,
         height: 52,
@@ -1287,32 +1573,29 @@ Future<void> _irAPlanificacion() async {
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFF1A1FC8),
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             elevation: 0,
           ),
-          child: Text(label,
-              style: const TextStyle(fontWeight: FontWeight.w600)),
+          child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
         ),
       );
 
   Widget _btnSecundario(VoidCallback onTap) => SizedBox(
-        width: 52, height: 52,
+        width: 52,
+        height: 52,
         child: OutlinedButton(
           onPressed: onTap,
           style: OutlinedButton.styleFrom(
             foregroundColor: const Color(0xFF1A1FC8),
             side: const BorderSide(color: Color(0xFF1A1FC8)),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             padding: EdgeInsets.zero,
           ),
           child: const Icon(Icons.arrow_back_rounded),
         ),
       );
 
-  Widget _mini(String label, Color color, VoidCallback onTap) =>
-      GestureDetector(
+  Widget _mini(String label, Color color, VoidCallback onTap) => GestureDetector(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
@@ -1333,13 +1616,11 @@ Future<void> _irAPlanificacion() async {
 
   Widget _pill(String label, Color color) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-        decoration: BoxDecoration(
-            color: color, borderRadius: BorderRadius.circular(20)),
+        decoration:
+            BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
         child: Text(label,
             style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.bold)),
+                color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
       );
 
   Widget _seccion(String label) => Padding(
@@ -1356,20 +1637,16 @@ Future<void> _irAPlanificacion() async {
         child: Column(children: [
           Text(valor,
               style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold)),
+                  color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
           Text(label,
-              style: const TextStyle(
-                  color: Color(0xFFADB5FF), fontSize: 10)),
+              style: const TextStyle(color: Color(0xFFADB5FF), fontSize: 10)),
         ]),
       );
 
-  Widget _divV() => Container(
-      height: 22, width: 1, color: Colors.white.withOpacity(0.25));
+  Widget _divV() =>
+      Container(height: 22, width: 1, color: Colors.white.withOpacity(0.25));
 
-  InputDecoration _inputDeco(String hint, {required IconData icon}) =>
-      InputDecoration(
+  InputDecoration _inputDeco(String hint, {required IconData icon}) => InputDecoration(
         hintText: hint,
         prefixIcon: Icon(icon, color: const Color(0xFF9CA3AF), size: 18),
         filled: true,
@@ -1381,16 +1658,15 @@ Future<void> _irAPlanificacion() async {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-              color: Color(0xFF1A1FC8), width: 2),
+          borderSide: const BorderSide(color: Color(0xFF1A1FC8), width: 2),
         ),
       );
 }
 
-// ── Estados de fila ──────────────────────────────────────────
+// ── Estados de fila ───────────────────────────────────────────
 enum _Estado { sinRegistrar, aprobada, perdida, aprobadaAntes, homologada }
 
-// ── Fila de materia ──────────────────────────────────────────
+// ── Fila de materia ───────────────────────────────────────────
 class _FilaMateria extends StatelessWidget {
   final String nombre;
   final _Estado estado;
@@ -1419,28 +1695,24 @@ class _FilaMateria extends StatelessWidget {
       case _Estado.aprobada:
         bg = const Color(0xFF4ADE00).withOpacity(0.05);
         trailing = Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_rounded,
-              color: Color(0xFF4ADE00), size: 18),
+          const Icon(Icons.check_circle_rounded, color: Color(0xFF4ADE00), size: 18),
           if (onQuitar != null) ...[
             const SizedBox(width: 8),
             GestureDetector(
                 onTap: onQuitar,
-                child: const Icon(Icons.close,
-                    color: Color(0xFF9CA3AF), size: 14)),
+                child: const Icon(Icons.close, color: Color(0xFF9CA3AF), size: 14)),
           ],
         ]);
         break;
       case _Estado.perdida:
         bg = const Color(0xFFFF6B6B).withOpacity(0.05);
         trailing = Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.cancel_rounded,
-              color: Color(0xFFFF6B6B), size: 18),
+          const Icon(Icons.cancel_rounded, color: Color(0xFFFF6B6B), size: 18),
           if (onQuitar != null) ...[
             const SizedBox(width: 8),
             GestureDetector(
                 onTap: onQuitar,
-                child: const Icon(Icons.close,
-                    color: Color(0xFF9CA3AF), size: 14)),
+                child: const Icon(Icons.close, color: Color(0xFF9CA3AF), size: 14)),
           ],
         ]);
         break;
@@ -1452,14 +1724,11 @@ class _FilaMateria extends StatelessWidget {
       case _Estado.homologada:
         bg = const Color(0xFF7C3AED).withOpacity(0.05);
         trailing = Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.verified_rounded,
-              color: Color(0xFF7C3AED), size: 16),
+          const Icon(Icons.verified_rounded, color: Color(0xFF7C3AED), size: 16),
           const SizedBox(width: 4),
           Text(etiquetaExtra ?? 'Homologada',
               style: const TextStyle(
-                  fontSize: 10,
-                  color: Color(0xFF7C3AED),
-                  fontWeight: FontWeight.w600)),
+                  fontSize: 10, color: Color(0xFF7C3AED), fontWeight: FontWeight.w600)),
         ]);
         break;
       default:
@@ -1470,8 +1739,7 @@ class _FilaMateria extends StatelessWidget {
                 GestureDetector(
                   onTap: onAprobada,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: const Color(0xFF4ADE00).withOpacity(0.10),
                       borderRadius: BorderRadius.circular(6),
@@ -1487,8 +1755,7 @@ class _FilaMateria extends StatelessWidget {
                 GestureDetector(
                   onTap: onPerdida,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: const Color(0xFFFF6B6B).withOpacity(0.10),
                       borderRadius: BorderRadius.circular(6),
@@ -1530,7 +1797,7 @@ class _FilaMateria extends StatelessWidget {
   }
 }
 
-// ── Card homologación externa ─────────────────────────────────
+// ── Card homologación externa ──────────────────────────────────
 class _CardHomologacion extends StatefulWidget {
   final Materia materia;
   final bool yaAgregada;
@@ -1569,9 +1836,7 @@ class _CardHomologacionState extends State<_CardHomologacion> {
             : Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: widget.yaAgregada
-              ? const Color(0xFF7C3AED)
-              : const Color(0xFFE5E7EB),
+          color: widget.yaAgregada ? const Color(0xFF7C3AED) : const Color(0xFFE5E7EB),
           width: widget.yaAgregada ? 1.5 : 1,
         ),
       ),
@@ -1580,15 +1845,12 @@ class _CardHomologacionState extends State<_CardHomologacion> {
         children: [
           Text(widget.materia.nombre,
               style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF1A1A2E))),
+                  fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1A1A2E))),
           const SizedBox(height: 8),
           Row(
             children: [
               const Text('Mediante:',
-                  style:
-                      TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               const SizedBox(width: 8),
               DropdownButton<String>(
                 value: _prog,
@@ -1597,8 +1859,7 @@ class _CardHomologacionState extends State<_CardHomologacion> {
                 items: _opciones
                     .map((o) => DropdownMenuItem(
                         value: o,
-                        child: Text(o,
-                            style: const TextStyle(fontSize: 13))))
+                        child: Text(o, style: const TextStyle(fontSize: 13))))
                     .toList(),
                 onChanged: (v) => setState(() => _prog = v!),
               ),
@@ -1607,16 +1868,14 @@ class _CardHomologacionState extends State<_CardHomologacion> {
                   ? TextButton(
                       onPressed: widget.onQuitar,
                       child: const Text('Quitar',
-                          style: TextStyle(
-                              fontSize: 12, color: Color(0xFF7C3AED))),
+                          style: TextStyle(fontSize: 12, color: Color(0xFF7C3AED))),
                     )
                   : ElevatedButton(
                       onPressed: () => widget.onAgregar(_prog),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF7C3AED),
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         elevation: 0,
@@ -1624,9 +1883,7 @@ class _CardHomologacionState extends State<_CardHomologacion> {
                             borderRadius: BorderRadius.circular(8)),
                       ),
                       child: const Text('Homologar',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600)),
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                     ),
             ],
           ),
