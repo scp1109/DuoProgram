@@ -11,10 +11,8 @@ class SesionExpiradaException implements Exception {
 }
 
 class ServicioApi {
-  //Para que funcione en edge: 'http://127.0.0.1:8000'
-  //Para que funcione en el emulador: 'http://10.0.2.2:8000'
-
-  static const String urlBase = 'http://127.0.0.1:8000';
+  // URL de la API en produccion (Railway)
+  static const String urlBase = 'https://web-production-52f53.up.railway.app';
 
   // ============================================================
   // PROGRAMAS
