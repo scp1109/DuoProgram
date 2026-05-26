@@ -243,6 +243,7 @@ class ServicioApi {
     required int semestresCursados,
     required List<Map<String, String>> homologacionesExternas,
     required bool practicaUnica,
+    bool practicaSola = false,
   }) async {
     try {
       final body = {
@@ -254,6 +255,7 @@ class ServicioApi {
         'semestres_cursados': semestresCursados,
         'homologaciones_externas': homologacionesExternas,
         'practica_unica': practicaUnica,
+        'practica_sola': practicaSola,
       };
 
       final respuesta = await http.post(

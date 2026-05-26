@@ -86,6 +86,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   bool _isGeneratingPlan = false;
   int _paso = 0;
   bool _practicaUnica = true;
+  bool _practicaSola = false;
   double _promedio = 0.0;
   // Controla si el usuario ya escribio algo en el campo de promedio.
   // El mensaje de feedback solo se muestra cuando es true.
@@ -462,6 +463,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         semestresCursados: _semestresCursados,
         homologacionesExternas: homologacionesList,
         practicaUnica: _practicaUnica,
+        practicaSola: _practicaSola,
       );
 
       final respuestaPlan = RespuestaPlan.fromJson(respuesta);
@@ -1102,18 +1104,36 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           child: SwitchListTile(
             title: const Text('Práctica profesional única',
                 style: TextStyle(fontWeight: FontWeight.w500)),
-            subtitle: const Text('Una sola práctica que sirve para ambos programas'),
+            subtitle: const Text(
+              'Una sola práctica que sirve para ambos programas',
+              style: TextStyle(fontSize: 12)
+            ),
             value: _practicaUnica,
             onChanged: (value) => setState(() => _practicaUnica = value),
             activeColor: const Color(0xFF1A1FC8),
             contentPadding: EdgeInsets.zero,
           ),
         ),
-        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: SwitchListTile(
+            title: const Text('Semestre dedicado solo a Prácticas',
+                style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: const Text(
+              'El último semestre estará dedicado únicamente a Prácticas Profesionales, '
+              'sin otras materias.',
+              style: TextStyle(fontSize: 12),
+            ),
+            value: _practicaSola,
+            onChanged: (value) => setState(() => _practicaSola = value),
+            activeColor: const Color(0xFF1A1FC8),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           child: Row(

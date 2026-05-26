@@ -357,7 +357,7 @@ Widget build(BuildContext context) {
                       ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                       child: TextField(
                         decoration: InputDecoration(
                           hintText: 'Buscar programa...',
@@ -408,7 +408,7 @@ Widget build(BuildContext context) {
                       ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       child: SizedBox(
                         width: double.infinity,
                         height: 52,
