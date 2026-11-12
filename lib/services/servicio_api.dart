@@ -107,7 +107,17 @@ class ServicioApi {
       // Mismo motivo que en _decodificar: UTF-8 explicito, no .body
       final error = json.decode(utf8.decode(respuesta.bodyBytes, allowMalformed: true));
       final detalle = error is Map ? error['detail'] : null;
-      if (detalle != null) return detalle.toString();
+      // Un 422 de validacion de FastAPI trae una lista de {loc, msg}, no un
+      // texto: se muestran solo los mensajes en vez de la lista cruda.
+      if (detalle is List) {
+        final mensajes = [
+          for (final e in detalle)
+            if (e is Map && e['msg'] != null) e['msg'].toString(),
+        ];
+        if (mensajes.isNotEmpty) return mensajes.join('; ');
+      } else if (detalle != null) {
+        return detalle.toString();
+      }
     } catch (_) {
       // El cuerpo no era JSON (pagina de error del proxy, HTML, vacio):
       // no hay nada que rescatar, se cae al mensaje por defecto.
@@ -369,6 +379,11 @@ class ServicioApi {
           'practica_sola': practicaSola,
         },
         tiempoLimite: _tiempoLargo,
+        // El backend responde 422 cuando no puede armar un plan completo y
+        // explica en `detail` que materias quedaron sin ubicar.
+        // Sin prefijo: la pantalla ya antepone "Error al generar el plan:".
+        mensajeError: (r) =>
+            _detalleBackend(r, 'el servidor respondio ${r.statusCode}'),
       ) as Map<String, dynamic>;
     } on TimeoutException {
       // El mensaje se arma con la constante para que no vuelva a quedar

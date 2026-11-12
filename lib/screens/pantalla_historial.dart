@@ -654,7 +654,9 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Superficies.radioInterior),
         ),
-        duration: const Duration(seconds: 4),
+        // 4 s alcanzan para un aviso corto, no para "no se pudo armar el
+        // plan" con la lista de materias: ~15 caracteres por segundo, hasta 12.
+        duration: Duration(seconds: (mensaje.length / 15).ceil().clamp(4, 12)),
       );
 
   // ── Build ─────────────────────────────────────────────────
