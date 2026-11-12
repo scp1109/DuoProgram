@@ -158,19 +158,9 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           lista.add(m);
           continue;
         }
-        final union = <String>{
-          ...lista[i].prerrequisitos,
-          ...m.prerrequisitos,
-        }.toList();
-        if (union.length != lista[i].prerrequisitos.length) {
-          lista[i] = Materia(
-            codigo: lista[i].codigo,
-            nombre: lista[i].nombre,
-            creditos: lista[i].creditos,
-            nivel: lista[i].nivel,
-            prerrequisitos: union,
-          );
-        }
+        // Ver Materia.combinar: la mas estricta si una contiene a la otra,
+        // caminos alternativos si no.
+        lista[i] = Materia.combinar(lista[i], m);
       }
     }
     _cacheMaterias = List.unmodifiable(lista);
@@ -229,7 +219,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           // Usar indexMaterias para lookup O(1)
           final mat = _indexMaterias[r.codigo];
           if (mat == null ||
-              mat.prerrequisitos.every((p) => validasAntes.contains(p))) {
+              mat.requisitosCumplidos(validasAntes.contains)) {
             nuevas.add(r.codigo);
             registradasValidas.add(r.codigo);
           }
@@ -279,13 +269,14 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     // Merge prereqs del canonico si aplica
     final prereqsExtra = _prerequisitosCanonicos[codigo] ?? const [];
     if (prereqsExtra.isEmpty) return base;
-    final prereqs = {...base.prerrequisitos, ...prereqsExtra}.toList();
-    return Materia(
-      codigo: base.codigo,
-      nombre: base.nombre,
-      creditos: base.creditos,
-      nivel: base.nivel,
-      prerrequisitos: prereqs,
+    // El extra se suma a la lista y tambien a cada camino alternativo, para
+    // no perder las alternativas al aplicar la red de seguridad.
+    return base.conPrerrequisitos(
+      {...base.prerrequisitos, ...prereqsExtra}.toList(),
+      [
+        for (final camino in base.alternativas)
+          {...camino, ...prereqsExtra}.toList(),
+      ],
     );
   }
 
@@ -299,8 +290,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
 
   bool _prerrequisitosCumplidos(String codigo, int semestre) {
     final mat = _materiaUnificada(codigo);
-    if (mat == null || mat.prerrequisitos.isEmpty) return true;
-    return mat.prerrequisitos.every((p) => _prereqCumplido(p, semestre));
+    if (mat == null) return true;
+    return mat.requisitosCumplidos((p) => _prereqCumplido(p, semestre));
   }
 
   Set<String> get _aprobadas =>
@@ -546,8 +537,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         return false;
       }
       if (aprobadas != null &&
-          m.prerrequisitos.isNotEmpty &&
-          !m.prerrequisitos.every((p) => aprobadas.contains(p))) {
+          !(_materiaUnificada(m.codigo) ?? m)
+              .requisitosCumplidos(aprobadas.contains)) {
         return false;
       }
       // No mostrar materias de la malla cuyo nivel sea <= al semestre actual.

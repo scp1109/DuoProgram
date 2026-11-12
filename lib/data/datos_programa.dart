@@ -54,13 +54,61 @@ class Materia {
   // Lista de codigos de materias que deben aprobarse antes.
   final List<String> prerrequisitos;
 
+  // Caminos alternativos, uno por programa. Solo se llena en doble programa,
+  // cuando una materia compartida exige cosas que no se contienen entre si
+  // (Estructura de Datos: POO en ISCO, Programacion para Ciencia de Datos en
+  // CDAT). Si no esta vacia, basta con cumplir UNO de los caminos.
+  final List<List<String>> alternativas;
+
   const Materia({
     required this.codigo,
     required this.nombre,
     required this.creditos,
     required this.nivel,
     this.prerrequisitos = const [],
+    this.alternativas = const [],
   });
+
+  /// Si los prerrequisitos estan cumplidos, segun [aprobada].
+  ///
+  /// Toda comprobacion de prerrequisitos debe pasar por aqui: si alguna usa
+  /// `prerrequisitos.every(...)` directo, ignora las alternativas y vuelve a
+  /// exigir los caminos de los dos programas a la vez.
+  bool requisitosCumplidos(bool Function(String codigo) aprobada) {
+    if (alternativas.isNotEmpty) {
+      return alternativas.any((camino) => camino.every(aprobada));
+    }
+    return prerrequisitos.every(aprobada);
+  }
+
+  /// Copia de esta materia con otros prerrequisitos.
+  Materia conPrerrequisitos(List<String> prereqs, List<List<String>> alts) =>
+      Materia(
+        codigo: codigo,
+        nombre: nombre,
+        creditos: creditos,
+        nivel: nivel,
+        prerrequisitos: prereqs,
+        alternativas: alts,
+      );
+
+  /// Combina lo que dos programas exigen a la misma materia. Es la misma
+  /// regla que combinar_prerrequisitos del backend:
+  ///  - si una lista contiene a la otra, manda la mas estricta (Calculo
+  ///    Vectorial: {Integral} frente a {Integral, Algebra Lineal});
+  ///  - si no se contienen, son caminos distintos y basta con uno.
+  /// La union pura exigia ambos caminos y bloqueaba, por ejemplo, Estructura
+  /// de Datos a quien habia cursado el curso de programacion de su programa.
+  static Materia combinar(Materia a, Materia b) {
+    final sa = a.prerrequisitos.toSet();
+    final sb = b.prerrequisitos.toSet();
+    if (sb.containsAll(sa)) return a.conPrerrequisitos(b.prerrequisitos, const []);
+    if (sa.containsAll(sb)) return a;
+    return a.conPrerrequisitos(
+      {...a.prerrequisitos, ...b.prerrequisitos}.toList(),
+      [a.prerrequisitos, b.prerrequisitos],
+    );
+  }
 
   // Convierte una materia que viene del backend en un objeto Materia de Dart.
   // Esto se usa cuando la app recibe la malla desde la BD por medio de la API.
