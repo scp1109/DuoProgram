@@ -1,6 +1,14 @@
 // ============================================================
 //  modelo_plan.dart
 //  Modelos para parsear la respuesta del API
+//
+//  Los fromJson usan casts explicitos con valor por defecto en vez
+//  de leer el campo pelado (json['codigo']). Antes, si el backend
+//  cambiaba el nombre de un campo o devolvia null, la app moria en
+//  runtime con un TypeError ilegible tipo "Null is not a subtype of
+//  String" sin decir cual materia ni cual campo. Con los defaults la
+//  pantalla se dibuja igual y el dato faltante se ve vacio o en cero,
+//  que es mucho mas facil de diagnosticar.
 // ============================================================
 
 class MateriaPlan {
@@ -20,11 +28,13 @@ class MateriaPlan {
 
   factory MateriaPlan.fromJson(Map<String, dynamic> json) {
     return MateriaPlan(
-      codigo: json['codigo'],
-      nombre: json['nombre'],
-      creditos: json['creditos'],
-      origen: json['origen'],
-      sirveParaAmbas: json['sirve_para_ambas'],
+      codigo: json['codigo'] as String? ?? '',
+      nombre: json['nombre'] as String? ?? '',
+      // Se castea a num y no a int porque JSON puede traer 3.0 en vez
+      // de 3, y en ese caso un `as int` reventaria.
+      creditos: (json['creditos'] as num?)?.toInt() ?? 0,
+      origen: json['origen'] as String? ?? '',
+      sirveParaAmbas: json['sirve_para_ambas'] as bool? ?? false,
     );
   }
 
@@ -58,13 +68,16 @@ class SemestrePlan {
 
   factory SemestrePlan.fromJson(Map<String, dynamic> json) {
     return SemestrePlan(
-      numero: json['numero'],
-      materias: (json['materias'] as List)
+      numero: (json['numero'] as num?)?.toInt() ?? 0,
+      // Si 'materias' viene null se usa lista vacia: un semestre sin
+      // materias se muestra vacio, pero no tumba toda la pantalla.
+      materias: (json['materias'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
           .map((m) => MateriaPlan.fromJson(m))
           .toList(),
-      totalCreditos: json['total_creditos'],
-      esPrimero: json['es_primero'],
-      esUltimo: json['es_ultimo'],
+      totalCreditos: (json['total_creditos'] as num?)?.toInt() ?? 0,
+      esPrimero: json['es_primero'] as bool? ?? false,
+      esUltimo: json['es_ultimo'] as bool? ?? false,
     );
   }
 
@@ -92,11 +105,13 @@ class RespuestaPlan {
 
   factory RespuestaPlan.fromJson(Map<String, dynamic> json) {
     return RespuestaPlan(
-      semestres: (json['semestres'] as List)
+      semestres: (json['semestres'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
           .map((s) => SemestrePlan.fromJson(s))
           .toList(),
-      totalSemestresFuturos: json['total_semestres_futuros'],
-      mensaje: json['mensaje'],
+      totalSemestresFuturos:
+          (json['total_semestres_futuros'] as num?)?.toInt() ?? 0,
+      mensaje: json['mensaje'] as String? ?? '',
     );
   }
 
