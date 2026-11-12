@@ -81,6 +81,31 @@ class Materia {
     return prerrequisitos.every(aprobada);
   }
 
+  /// Grafo de prerrequisitos de una malla: codigo -> prerrequisitos directos.
+  static Map<String, List<String>> grafoDe(List<Materia> materias) =>
+      {for (final m in materias) m.codigo: m.prerrequisitos};
+
+  /// Todos los prerrequisitos de [codigo] en [grafo], directos e indirectos.
+  /// [memo] evita recalcular y corta ciclos si la BD trajera alguno.
+  static Set<String> cierre(
+    String codigo,
+    Map<String, List<String>> grafo, [
+    Map<String, Set<String>>? memo,
+  ]) {
+    final cache = memo ?? <String, Set<String>>{};
+    final previo = cache[codigo];
+    if (previo != null) return previo;
+    cache[codigo] = <String>{};
+    final total = <String>{};
+    for (final pre in grafo[codigo] ?? const <String>[]) {
+      total
+        ..add(pre)
+        ..addAll(cierre(pre, grafo, cache));
+    }
+    cache[codigo] = total;
+    return total;
+  }
+
   /// Copia de esta materia con otros prerrequisitos.
   Materia conPrerrequisitos(List<String> prereqs, List<List<String>> alts) =>
       Materia(
@@ -92,22 +117,33 @@ class Materia {
         alternativas: alts,
       );
 
-  /// Combina lo que dos programas exigen a la misma materia. Es la misma
-  /// regla que combinar_prerrequisitos del backend:
-  ///  - si una lista contiene a la otra, manda la mas estricta (Calculo
-  ///    Vectorial: {Integral} frente a {Integral, Algebra Lineal});
-  ///  - si no se contienen, son caminos distintos y basta con uno.
-  /// La union pura exigia ambos caminos y bloqueaba, por ejemplo, Estructura
-  /// de Datos a quien habia cursado el curso de programacion de su programa.
-  static Materia combinar(Materia a, Materia b) {
-    final sa = a.prerrequisitos.toSet();
-    final sb = b.prerrequisitos.toSet();
-    if (sb.containsAll(sa)) return a.conPrerrequisitos(b.prerrequisitos, const []);
-    if (sa.containsAll(sb)) return a;
-    return a.conPrerrequisitos(
-      {...a.prerrequisitos, ...b.prerrequisitos}.toList(),
-      [a.prerrequisitos, b.prerrequisitos],
-    );
+  /// Combina lo que dos programas exigen a la misma materia.
+  ///
+  /// Si ninguno domina, son caminos distintos y basta con uno: exigir la
+  /// union de ambos bloqueaba, por ejemplo, Estructura de Datos a quien
+  /// habia cursado el curso de programacion de su programa.
+  ///
+  /// Se compara la lista DIRECTA de un programa con el CIERRE transitivo del
+  /// otro ([cierreA], [cierreB]). Si lo que pide uno ya esta en la cadena del
+  /// otro, domina: se exigen ambas listas, sin alternativas. Asi sale bien
+  /// Fisica Calor y Ondas (ISCO pide Mecanica, IIND pide Electricidad, que
+  /// exige Mecanica). Cierre contra cierre fallaba con diferencias rio
+  /// arriba: en IMEC+ISCO, Procesamiento Numerico dejaba de exigir POO
+  /// porque IMEC declara Calculo Vectorial distinto. Es la misma regla que
+  /// el backend (combinar_prerrequisitos en motor/planificador.py).
+  static Materia combinar(
+    Materia a,
+    Materia b, {
+    Set<String> cierreA = const {},
+    Set<String> cierreB = const {},
+  }) {
+    final sa = {...a.prerrequisitos, ...cierreA};
+    final sb = {...b.prerrequisitos, ...cierreB};
+    final union = {...a.prerrequisitos, ...b.prerrequisitos}.toList();
+    if (sb.containsAll(a.prerrequisitos) || sa.containsAll(b.prerrequisitos)) {
+      return a.conPrerrequisitos(union, const []);
+    }
+    return a.conPrerrequisitos(union, [a.prerrequisitos, b.prerrequisitos]);
   }
 
   // Convierte una materia que viene del backend en un objeto Materia de Dart.

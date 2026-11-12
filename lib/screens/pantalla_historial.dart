@@ -145,22 +145,30 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     // Construir lista unificada principal + secundario.
     //
     // Una misma materia puede exigir prerrequisitos distintos en cada
-    // programa: CBAS_M05A pide M03A y M04A en CDAT/IMEC, pero solo M03A en
-    // IIND/ISCO. Antes se descartaba el duplicado y ganaba la version del
-    // principal, perdiendo los prerrequisitos del secundario; el historial
-    // dejaba entonces marcar una materia junto a su propio prerrequisito.
-    // En doble programa hay que cumplir AMBOS planes, asi que se unen.
+    // programa. Antes se descartaba el duplicado y ganaba la version del
+    // principal, perdiendo los prerrequisitos del secundario. Ahora se
+    // combinan con Materia.combinar, que compara lo que pide cada programa
+    // con la cadena de prerrequisitos del otro: si uno queda dentro de la
+    // cadena del otro se exigen ambas listas, y si no, son caminos
+    // alternativos y basta con uno.
     final lista = [...widget.programa.materias];
     if (widget.programaSecundario != null) {
+      final grafoP = Materia.grafoDe(widget.programa.materias);
+      final grafoS = Materia.grafoDe(widget.programaSecundario!.materias);
+      final memoP = <String, Set<String>>{};
+      final memoS = <String, Set<String>>{};
       for (final m in widget.programaSecundario!.materias) {
         final i = lista.indexWhere((x) => x.codigo == m.codigo);
         if (i < 0) {
           lista.add(m);
           continue;
         }
-        // Ver Materia.combinar: la mas estricta si una contiene a la otra,
-        // caminos alternativos si no.
-        lista[i] = Materia.combinar(lista[i], m);
+        lista[i] = Materia.combinar(
+          lista[i],
+          m,
+          cierreA: Materia.cierre(m.codigo, grafoP, memoP),
+          cierreB: Materia.cierre(m.codigo, grafoS, memoS),
+        );
       }
     }
     _cacheMaterias = List.unmodifiable(lista);
