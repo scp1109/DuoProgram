@@ -11,7 +11,10 @@ import '../data/datos_programa.dart';
 import '../services/servicio_api.dart';
 import '../utils/sesion_helper.dart';
 import '../widgets/menu_lateral.dart';
+import '../theme/colores.dart';
 import 'pantalla_seleccion.dart';
+import '../theme/transiciones.dart';
+import '../widgets/superficie.dart';
 
 class PantallaPlanificacion extends StatefulWidget {
   final RespuestaPlan respuestaPlan;
@@ -51,11 +54,11 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
 
   Color _getOrigenColor(String origen) {
     switch (origen) {
-      case 'principal':  return Colors.blue;
-      case 'secundario': return Colors.green;
-      case 'compartida': return Colors.amber;
-      case 'practica':   return Colors.purple.shade900;
-      default:           return Colors.grey;
+      case 'principal':  return Colores.primario;
+      case 'secundario': return Colores.exitoOscuro;
+      case 'compartida': return Colores.advertenciaFuerte;
+      case 'practica':   return Colores.acentoMorado;
+      default:           return Colores.textoTenue;
     }
   }
 
@@ -98,7 +101,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('No se pudo guardar el plan: $e'),
-            backgroundColor: Colors.orange,
+            backgroundColor: Colores.acentoNaranja,
           ),
         );
       }
@@ -107,8 +110,8 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
     if (mounted) {
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(
-          builder: (_) => PantallaSeleccion(
+        RutaRaiz(
+          pagina: PantallaSeleccion(
             token:    widget.token,
             datosUsuario: widget.datosUsuario,
           ),
@@ -125,7 +128,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
     final nombre = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Superficies.radioTarjeta)),
         title: const Text(
           'Nombrar plan',
           style: TextStyle(fontWeight: FontWeight.bold),
@@ -136,7 +139,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
           children: [
             const Text(
               'Ponle un nombre para identificarlo despues.',
-              style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+              style: TextStyle(fontSize: 13, color: Colores.textoSecundario),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -146,16 +149,16 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
               decoration: InputDecoration(
                 hintText: 'Ej. Plan 2026-2',
                 filled: true,
-                fillColor: const Color(0xFFF9FAFB),
+                fillColor: Colores.fondoNeutroClaro,
                 counterText: '',
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                  borderSide: const BorderSide(color: Colores.bordeSuave),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide:
-                      const BorderSide(color: Color(0xFF1A1FC8), width: 2),
+                      const BorderSide(color: Colores.primario, width: 2),
                 ),
               ),
             ),
@@ -165,7 +168,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancelar',
-                style: TextStyle(color: Color(0xFF6B7280))),
+                style: TextStyle(color: Colores.textoSecundario)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -173,7 +176,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
               Navigator.pop(ctx, texto.isEmpty ? null : texto);
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1A1FC8),
+              backgroundColor: Colores.primario,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
@@ -192,6 +195,14 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
     await _guardarYSalir(nombre: nombre);
   }
 
+  /// Semestres cuya animacion de entrada ya se ejecuto.
+  ///
+  /// ListView.builder destruye los items que salen de pantalla y los
+  /// reconstruye al volver, asi que sin esto la animacion se repetia cada
+  /// vez que el usuario subia. Este Set vive en el State de la pantalla,
+  /// que no se destruye con el scroll.
+  final Set<int> _semestresRevelados = {};
+
   @override
   Widget build(BuildContext context) {
     // PopScope con canPop: false impide volver atras con gesto o boton del sistema.
@@ -200,14 +211,35 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
     return PopScope(
       canPop: false,
       child: Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
+      backgroundColor: Colores.fondoApp,
       drawer: MenuLateral(token: widget.token, datosUsuario: widget.datosUsuario),
       appBar: AppBar(
-        title: const Text('Plan de Estudios'),
-        backgroundColor: const Color(0xFF1A1FC8),
+        title: const Text('Plan de Estudios',
+            style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 17,
+                letterSpacing: -0.3)),
+        // flexibleSpace y no backgroundColor: la cabecera lleva degradado y
+        // esquinas inferiores redondeadas como en el resto de la app, para
+        // que se lea como panel apoyado y no como franja pegada al borde.
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
+        scrolledUnderElevation: 0,
         automaticallyImplyLeading: false,
+        flexibleSpace: Container(
+          // Container y no DecoratedBox: en flexibleSpace el hijo recibe
+          // restricciones sueltas y un DecoratedBox sin hijo mide cero,
+          // asi que el degradado no llegaba a pintarse.
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Colores.primario, Superficies.tintaProfunda],
+            ),
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(26)),
+          ),
+        ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(50),
           child: Container(
@@ -223,8 +255,9 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF4ADE00),
-                    borderRadius: BorderRadius.circular(20),
+                    color: Colores.exito,
+                    borderRadius:
+                        BorderRadius.circular(Superficies.radioPildora),
                   ),
                   child: Text(
                     '${widget.respuestaPlan.totalSemestresFuturos}',
@@ -252,20 +285,20 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                 child: OutlinedButton.icon(
                   onPressed: _guardando ? null : _mostrarDialogoNombre,
                   icon: const Icon(Icons.bookmark_outline_rounded,
-                      color: Color(0xFF1A1FC8)),
+                      color: Colores.primario),
                   label: const Text(
                     'Nombrar plan',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF1A1FC8),
+                      color: Colores.primario,
                     ),
                   ),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(
-                        color: Color(0xFF1A1FC8), width: 1.5),
+                        color: Colores.primario, width: 1.5),
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                        borderRadius: BorderRadius.circular(Superficies.radioPildora)),
                     backgroundColor: Colors.white,
                   ),
                 ),
@@ -296,11 +329,11 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                     ),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF4ADE00),
+                    backgroundColor: Colores.exito,
                     disabledBackgroundColor:
-                        const Color(0xFF4ADE00).withOpacity(0.5),
+                        Colores.exito.withValues(alpha: 0.5),
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                        borderRadius: BorderRadius.circular(Superficies.radioPildora)),
                     elevation: 0,
                   ),
                 ),
@@ -314,11 +347,20 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
         itemCount: widget.respuestaPlan.semestres.length,
         itemBuilder: (context, index) {
           final semestre = widget.respuestaPlan.semestres[index];
-          return Card(
+          // ListView.builder construye cada tarjeta al entrar en pantalla,
+          // asi que este revelado coincide solo con el scroll: no hace
+          // falta detectar visibilidad.
+          final yaRevelado = _semestresRevelados.contains(index);
+          return RevelarProfundidad(
+            indice: index,
+            // Ya visto: se pinta en su estado final, sin repetir la entrada.
+            animar: !yaRevelado,
+            alTerminar: () => _semestresRevelados.add(index),
+            builder: (context, progreso) => Card(
             margin: const EdgeInsets.only(bottom: 16),
             elevation: 2,
             shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+                borderRadius: BorderRadius.circular(Superficies.radioTarjeta)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -327,13 +369,12 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: semestre.esPrimero
-                        ? Colors.deepPurple.shade100
+                        ? Colores.acentoMorado.withValues(alpha: 0.16)
                         : semestre.esUltimo
-                            ? Colors.orange.shade100
-                            : Colors.grey.shade100,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
+                            ? Colores.acentoNaranja.withValues(alpha: 0.14)
+                            : Superficies.brumaLavanda,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(Superficies.radioTarjeta),
                     ),
                   ),
                   child: Row(
@@ -346,9 +387,9 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                             height: 40,
                             decoration: BoxDecoration(
                               color: semestre.esUltimo
-                                  ? Colors.orange
-                                  : const Color(0xFF1A1FC8),
-                              borderRadius: BorderRadius.circular(12),
+                                  ? Colores.acentoNaranja
+                                  : Colores.primario,
+                              borderRadius: BorderRadius.circular(Superficies.radioPildora),
                             ),
                             child: Center(
                               child: Text(
@@ -370,7 +411,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF1A1A2E),
+                                  color: Colores.textoTitulo,
                                 ),
                               ),
                               if (semestre.esUltimo)
@@ -378,7 +419,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                   'Practica Profesional',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.orange,
+                                    color: Colores.acentoNaranja,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
@@ -390,7 +431,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1A1FC8),
+                          color: Colores.primario,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
@@ -409,8 +450,16 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                 Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
-                    children: semestre.materias.map((materia) {
-                      return Padding(
+                    children:
+                        semestre.materias.asMap().entries.map((entrada) {
+                      final posicion = entrada.key;
+                      final materia = entrada.value;
+                      return RevelarApilado(
+                        indice: posicion,
+                        // Mismo reloj que la tarjeta: la materia no guarda
+                        // tiempo propio, solo lee su tramo.
+                        progreso: progreso,
+                        child: Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -434,7 +483,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                     style: const TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.w500,
-                                      color: Color(0xFF1A1A2E),
+                                      color: Colores.textoTitulo,
                                     ),
                                   ),
                                   const SizedBox(height: 4),
@@ -444,7 +493,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                         materia.codigo,
                                         style: TextStyle(
                                           fontSize: 11,
-                                          color: Colors.grey.shade600,
+                                          color: Colores.textoSecundario,
                                           fontFamily: 'monospace',
                                         ),
                                       ),
@@ -452,7 +501,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                       Container(
                                         width: 4, height: 4,
                                         decoration: BoxDecoration(
-                                          color: Colors.grey.shade400,
+                                          color: Colores.textoTenue,
                                           shape: BoxShape.circle,
                                         ),
                                       ),
@@ -461,14 +510,14 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                         '${materia.creditos} creditos',
                                         style: TextStyle(
                                           fontSize: 11,
-                                          color: Colors.grey.shade600,
+                                          color: Colores.textoSecundario,
                                         ),
                                       ),
                                       const SizedBox(width: 8),
                                       Container(
                                         width: 4, height: 4,
                                         decoration: BoxDecoration(
-                                          color: Colors.grey.shade400,
+                                          color: Colores.textoTenue,
                                           shape: BoxShape.circle,
                                         ),
                                       ),
@@ -479,7 +528,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                         decoration: BoxDecoration(
                                           color: _getOrigenColor(
                                                   materia.origen)
-                                              .withOpacity(0.1),
+                                              .withValues(alpha: 0.1),
                                           borderRadius:
                                               BorderRadius.circular(10),
                                         ),
@@ -503,10 +552,10 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: Colors.amber.shade100,
-                                  borderRadius: BorderRadius.circular(12),
+                                  color: Colores.advertencia.withValues(alpha: 0.18),
+                                  borderRadius: BorderRadius.circular(Superficies.radioPildora),
                                   border: Border.all(
-                                      color: Colors.amber.shade300,
+                                      color: Colores.advertencia,
                                       width: 0.5),
                                 ),
                                 child: const Text(
@@ -514,12 +563,13 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.amber,
+                                    color: Colores.advertenciaFuerte,
                                   ),
                                 ),
                               ),
                           ],
                         ),
+                      ),
                       );
                     }).toList(),
                   ),
@@ -529,21 +579,20 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: const BorderRadius.only(
-                        bottomLeft: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
+                      color: Colores.acentoNaranja.withValues(alpha: 0.08),
+                      borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(Superficies.radioTarjeta),
                       ),
                     ),
                     child: Row(
                       children: [
                         const Icon(Icons.work_outline,
-                            size: 16, color: Colors.orange),
+                            size: 16, color: Colores.acentoNaranja),
                         const SizedBox(width: 8),
                         const Text(
                           'Semestre de practica profesional',
                           style: TextStyle(
-                              fontSize: 12, color: Colors.orange),
+                              fontSize: 12, color: Colores.acentoNaranja),
                         ),
                         const Spacer(),
                         Text(
@@ -551,7 +600,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                         style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: Colors.orange.shade700,
+                        color: Colores.acentoNaranja,
                         ),
                         ),
                       ],
@@ -559,6 +608,7 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                   ),
               ],
             ),
+          ),
           );
         },
       ),

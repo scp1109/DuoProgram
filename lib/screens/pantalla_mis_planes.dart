@@ -6,7 +6,10 @@
 import 'package:flutter/material.dart';
 import '../services/servicio_api.dart';
 import '../utils/sesion_helper.dart';
+import '../theme/colores.dart';
 import 'pantalla_ver_plan.dart';
+import '../theme/transiciones.dart';
+import '../widgets/superficie.dart';
 
 class PantallaMisPlanes extends StatefulWidget {
   final String token;
@@ -37,6 +40,9 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
 
     try {
       final planes = await _servicioApi.obtenerMisPlanes(widget.token);
+      // El usuario pudo navegar hacia atras mientras la peticion estaba en
+      // vuelo; sin esta guarda setState revienta con "called after dispose".
+      if (!mounted) return;
       setState(() {
         _planes = planes;
         _cargando = false;
@@ -44,6 +50,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
     } on SesionExpiradaException {
       if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _cargando = false;
@@ -66,7 +73,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colores.error,
               foregroundColor: Colors.white,
             ),
             child: const Text('Eliminar'),
@@ -80,20 +87,24 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
       try {
         await _servicioApi.eliminarPlanGuardado(widget.token, planId);
         await _cargarPlanes();
+        // Guarda tras los awaits: si el usuario salio de la pantalla no hay
+        // ScaffoldMessenger al que pedirle el SnackBar.
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Plan eliminado correctamente'),
-            backgroundColor: Colors.green,
+            backgroundColor: Colores.exitoOscuro,
           ),
         );
       } on SesionExpiradaException {
         if (mounted) await SesionHelper.manejarSesionExpirada(context);
       } catch (e) {
+        if (!mounted) return;
         setState(() => _cargando = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error al eliminar: ${e.toString().replaceFirst('Exception: ', '')}'),
-            backgroundColor: Colors.red,
+            backgroundColor: Colores.error,
           ),
         );
       }
@@ -113,9 +124,9 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
+      backgroundColor: Colores.fondoApp,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
+        backgroundColor: Colores.primario,
         foregroundColor: Colors.white,
         elevation: 0,
         title: const Text(
@@ -136,12 +147,12 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   CircularProgressIndicator(
-                    color: Color(0xFF1A1FC8),
+                    color: Colores.primario,
                   ),
                   SizedBox(height: 16),
                   Text(
                     'Cargando tus planes...',
-                    style: TextStyle(color: Color(0xFF6B7280)),
+                    style: TextStyle(color: Colores.textoSecundario),
                   ),
                 ],
               ),
@@ -157,13 +168,13 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                           width: 80,
                           height: 80,
                           decoration: BoxDecoration(
-                            color: Colors.red.shade50,
+                            color: Colores.error.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(40),
                           ),
                           child: const Icon(
                             Icons.error_outline,
                             size: 40,
-                            color: Colors.red,
+                            color: Colores.error,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -172,7 +183,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1A2E),
+                            color: Colores.textoTitulo,
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -183,7 +194,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF6B7280),
+                              color: Colores.textoSecundario,
                             ),
                           ),
                         ),
@@ -191,7 +202,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                         ElevatedButton(
                           onPressed: _cargarPlanes,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1A1FC8),
+                            backgroundColor: Colores.primario,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 32,
                               vertical: 12,
@@ -218,13 +229,13 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                             width: 100,
                             height: 100,
                             decoration: BoxDecoration(
-                              color: const Color(0xFF1A1FC8).withOpacity(0.1),
+                              color: Colores.primario.withValues(alpha: 0.1),
                               shape: BoxShape.circle,
                             ),
                             child: const Icon(
                               Icons.folder_open,
                               size: 50,
-                              color: Color(0xFF1A1FC8),
+                              color: Colores.primario,
                             ),
                           ),
                           const SizedBox(height: 24),
@@ -233,7 +244,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF1A1A2E),
+                              color: Colores.textoTitulo,
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -241,7 +252,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                             'Genera un plan desde la pantalla principal',
                             style: TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF6B7280),
+                              color: Colores.textoSecundario,
                             ),
                           ),
                           const SizedBox(height: 24),
@@ -250,7 +261,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                             icon: const Icon(Icons.arrow_back_rounded),
                             label: const Text('Volver'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF1A1FC8),
+                              backgroundColor: Colores.primario,
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -267,28 +278,38 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                         itemCount: _planes.length,
                         itemBuilder: (context, index) {
                           final plan = _planes[index];
-                          return Container(
+                          // Cascaron exterior del bisel. La sombra se tinta
+                          // con el azul de marca en vez de negro: sobre un
+                          // fondo con color, el negro deja un halo gris sucio.
+                          return Revelar(
+                            indice: index,
+                            child: Container(
                             margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(5),
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
+                              color: Superficies.brumaLavanda,
+                              borderRadius: BorderRadius.circular(
+                                  Superficies.radioTarjeta),
+                              border: Border.all(
+                                  color: Superficies.nieblaAzul
+                                      .withValues(alpha: 0.6)),
+                              boxShadow: Superficies.ambiente,
                             ),
+                            // Nucleo interior con radio concentrico.
                             child: Material(
-                              color: Colors.transparent,
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(
+                                  Superficies.radioInterno(
+                                      Superficies.radioTarjeta, 5)),
                               child: InkWell(
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(
+                                    Superficies.radioInterno(
+                                        Superficies.radioTarjeta, 5)),
                                 onTap: () {
                                   Navigator.push(
                                     context,
-                                    MaterialPageRoute(
-                                      builder: (_) => PantallaVerPlan(
+                                    RutaProfundidad(
+                                      pagina: PantallaVerPlan(
                                         token: widget.token,
                                         planId: plan['id'],
                                       ),
@@ -306,12 +327,12 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                             width: 50,
                                             height: 50,
                                             decoration: BoxDecoration(
-                                              color: const Color(0xFF1A1FC8).withOpacity(0.1),
+                                              color: Colores.primario.withValues(alpha: 0.1),
                                               borderRadius: BorderRadius.circular(12),
                                             ),
                                             child: const Icon(
                                               Icons.school_rounded,
-                                              color: Color(0xFF1A1FC8),
+                                              color: Colores.primario,
                                               size: 28,
                                             ),
                                           ),
@@ -329,7 +350,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                                   style: const TextStyle(
                                                     fontSize: 16,
                                                     fontWeight: FontWeight.bold,
-                                                    color: Color(0xFF1A1A2E),
+                                                    color: Colores.textoTitulo,
                                                   ),
                                                 ),
                                                 const SizedBox(height: 4),
@@ -341,14 +362,14 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                                         vertical: 2,
                                                       ),
                                                       decoration: BoxDecoration(
-                                                        color: const Color(0xFF4ADE00).withOpacity(0.1),
+                                                        color: Colores.exito.withValues(alpha: 0.1),
                                                         borderRadius: BorderRadius.circular(12),
                                                       ),
                                                       child: Text(
                                                         'Promedio: ${plan['promedio']}',
                                                         style: const TextStyle(
                                                           fontSize: 11,
-                                                          color: Color(0xFF166534),
+                                                          color: Colores.exitoOscuro,
                                                           fontWeight: FontWeight.w500,
                                                         ),
                                                       ),
@@ -360,14 +381,14 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                                         vertical: 2,
                                                       ),
                                                       decoration: BoxDecoration(
-                                                        color: const Color(0xFF1A1FC8).withOpacity(0.1),
+                                                        color: Colores.primario.withValues(alpha: 0.1),
                                                         borderRadius: BorderRadius.circular(12),
                                                       ),
                                                       child: Text(
                                                         'Semestres: ${plan['semestres_cursados']}',
                                                         style: const TextStyle(
                                                           fontSize: 11,
-                                                          color: Color(0xFF1A1FC8),
+                                                          color: Colores.primario,
                                                           fontWeight: FontWeight.w500,
                                                         ),
                                                       ),
@@ -385,14 +406,14 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                           Icon(
                                             Icons.calendar_today_rounded,
                                             size: 14,
-                                            color: Colors.grey.shade500,
+                                            color: Colores.textoTenue,
                                           ),
                                           const SizedBox(width: 4),
                                           Text(
                                             _formatearFecha(plan['created_at']),
                                             style: TextStyle(
                                               fontSize: 12,
-                                              color: Colors.grey.shade500,
+                                              color: Colores.textoTenue,
                                             ),
                                           ),
                                           const Spacer(),
@@ -400,7 +421,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                             icon: const Icon(
                                               Icons.delete_outline,
                                               size: 20,
-                                              color: Colors.red,
+                                              color: Colores.error,
                                             ),
                                             onPressed: () => _eliminarPlan(plan['id']),
                                             tooltip: 'Eliminar',
@@ -411,6 +432,7 @@ class _PantallaMisPlanesState extends State<PantallaMisPlanes> {
                                   ),
                                 ),
                               ),
+                            ),
                             ),
                           );
                         },
