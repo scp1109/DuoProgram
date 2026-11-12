@@ -148,22 +148,15 @@ class _MenuLateralState extends State<MenuLateral> {
     // Drawer es el panel lateral que se abre desde el menu hamburguesa.
     return Drawer(
       child: Container(
-        // Degradado en vez de azul plano: da profundidad al panel y hace
-        // que los items resalten mejor en la mitad inferior, donde el
-        // fondo es mas oscuro.
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colores.primario, Superficies.tintaProfunda],
-          ),
+          color: Colores.primario,
         ),
         child: Column(
           children: [
             // Header del drawer: muestra foto, nombre y correo del usuario.
             Container(
               padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
-              // Sin color propio: pintarlo cortaria el degradado del panel.
+              // Sin color propio: hereda el azul del panel.
               decoration: const BoxDecoration(),
               child: Column(
                 children: [

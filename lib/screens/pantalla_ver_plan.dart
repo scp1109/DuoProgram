@@ -108,23 +108,19 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
     return Scaffold(
       backgroundColor: Colores.fondoApp,
       appBar: AppBar(
-        // flexibleSpace y no backgroundColor: asi la barra lleva el mismo
-        // degradado y las esquinas inferiores redondeadas del resto de la
-        // app, en vez de quedar como una franja plana pegada al borde.
+        // flexibleSpace y no backgroundColor: backgroundColor pinta un
+        // rectangulo recto, y aqui hacen falta las esquinas inferiores
+        // redondeadas del resto de la app.
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         flexibleSpace: Container(
           // Container y no DecoratedBox: en flexibleSpace el hijo recibe
-          // restricciones sueltas y un DecoratedBox sin hijo mide cero,
-          // asi que el degradado no llegaba a pintarse.
+          // restricciones sueltas y un DecoratedBox sin hijo mide cero, asi
+          // que no se pintaba nada.
           decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colores.primario, Superficies.tintaMedia],
-            ),
+            color: Colores.primario,
             borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
           ),
         ),

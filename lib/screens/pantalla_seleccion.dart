@@ -332,13 +332,7 @@ Widget build(BuildContext context) {
                       width: double.infinity,
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                       decoration: const BoxDecoration(
-                        // Degradado sutil hacia la tinta profunda: da
-                        // volumen al panel sin salirse del azul de marca.
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Colores.primario, Superficies.tintaMedia],
-                        ),
+                        color: Colores.primario,
                         // Esquinas inferiores redondeadas: la cabecera deja
                         // de ser una franja pegada y pasa a leerse como un
                         // panel apoyado sobre el contenido.

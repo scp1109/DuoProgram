@@ -134,25 +134,11 @@ class _PantallaInicioState extends State<PantallaInicio> {
     }
 
     return Scaffold(
-      backgroundColor: Colores.fondoApp,
+      // Lavanda solida en las dos pantallas de acceso, para que
+      // login y registro se lean como la misma familia.
+      backgroundColor: Superficies.brumaLavanda,
       body: Stack(
         children: [
-          // Resplandor radial de fondo. Es un solo gradiente fijo, no una
-          // capa con blur: el blur sobre contenido que scrollea repinta la
-          // GPU en cada frame y tumba los fps en movil.
-          const Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment(0, -0.75),
-                    radius: 1.1,
-                    colors: [Superficies.brumaLavanda, Colores.fondoApp],
-                  ),
-                ),
-              ),
-            ),
-          ),
           SafeArea(
             child: SingleChildScrollView(
               // Respiracion amplia: el aire alrededor del formulario es

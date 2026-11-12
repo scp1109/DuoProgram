@@ -219,9 +219,10 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
                 fontWeight: FontWeight.w700,
                 fontSize: 17,
                 letterSpacing: -0.3)),
-        // flexibleSpace y no backgroundColor: la cabecera lleva degradado y
-        // esquinas inferiores redondeadas como en el resto de la app, para
-        // que se lea como panel apoyado y no como franja pegada al borde.
+        // flexibleSpace y no backgroundColor: backgroundColor pinta un
+        // rectangulo recto, y aqui hacen falta las esquinas inferiores
+        // redondeadas del resto de la app para que la cabecera se lea como
+        // panel apoyado y no como franja pegada al borde.
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
@@ -229,14 +230,10 @@ class _PantallaPlanificacionState extends State<PantallaPlanificacion> {
         automaticallyImplyLeading: false,
         flexibleSpace: Container(
           // Container y no DecoratedBox: en flexibleSpace el hijo recibe
-          // restricciones sueltas y un DecoratedBox sin hijo mide cero,
-          // asi que el degradado no llegaba a pintarse.
+          // restricciones sueltas y un DecoratedBox sin hijo mide cero, asi
+          // que no se pintaba nada.
           decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Colores.primario, Superficies.tintaProfunda],
-            ),
+            color: Colores.primario,
             borderRadius: BorderRadius.vertical(bottom: Radius.circular(26)),
           ),
         ),

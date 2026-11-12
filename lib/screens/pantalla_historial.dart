@@ -693,14 +693,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 6, 14, 22),
       decoration: const BoxDecoration(
-        // Mismo criterio que la cabecera de seleccion: degradado del azul de
-        // marca hacia la tinta profunda, para dar volumen sin salirse de la
-        // paleta institucional.
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colores.primario, Superficies.tintaMedia],
-        ),
+        // Azul de marca solido, mismo criterio que la cabecera de seleccion.
+        color: Colores.primario,
         // Esquinas inferiores redondeadas: deja de ser una franja pegada de
         // lado a lado y pasa a leerse como panel apoyado sobre el contenido.
         borderRadius: BorderRadius.only(
@@ -1283,8 +1277,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   }
 
   /// Resumen de avance. Va como tarjeta apoyada sobre el fondo y no como
-  /// franja azul de lado a lado: mismo degradado de marca que la cabecera,
-  /// pero con las cuatro esquinas curvadas y sombra tintada.
+  /// franja azul de lado a lado: mismo azul de marca que la cabecera, pero
+  /// con las cuatro esquinas curvadas y sombra tintada.
   Widget _panelEstadisticas(List<int> excedidos, bool hayExcedidos) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
@@ -1292,11 +1286,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Colores.primario, Superficies.tintaProfunda],
-          ),
+          color: Colores.primario,
           borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
           boxShadow: Superficies.elevada,
         ),

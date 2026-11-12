@@ -101,7 +101,9 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colores.fondoApp,
+      // Lavanda solida en las dos pantallas de acceso, para que
+      // login y registro se lean como la misma familia.
+      backgroundColor: Superficies.brumaLavanda,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -113,21 +115,6 @@ class _PantallaRegistroState extends State<PantallaRegistro> {
       ),
       body: Stack(
         children: [
-          // Mismo resplandor que el login: las dos pantallas de acceso
-          // deben leerse como la misma familia.
-          const Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment(0, -0.8),
-                    radius: 1.1,
-                    colors: [Superficies.brumaLavanda, Colores.fondoApp],
-                  ),
-                ),
-              ),
-            ),
-          ),
           SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 40),

@@ -248,19 +248,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(24),
-                      // Degradado hacia la tinta profunda y esquinas
-                      // inferiores redondeadas, igual que en seleccion e
-                      // historial: la cabecera se lee como panel apoyado
-                      // sobre el contenido, no como franja pegada al borde.
+                      // Esquinas inferiores redondeadas, igual que en
+                      // seleccion e historial: la cabecera se lee como panel
+                      // apoyado sobre el contenido, no como franja pegada.
                       decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Colores.primario,
-                            Superficies.tintaProfunda
-                          ],
-                        ),
+                        color: Colores.primario,
                         borderRadius: BorderRadius.only(
                           bottomLeft: Radius.circular(30),
                           bottomRight: Radius.circular(30),
