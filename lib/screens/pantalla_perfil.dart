@@ -10,12 +10,16 @@ import 'package:flutter/foundation.dart'; // kIsWeb
 import 'dart:convert'; // base64
 import '../services/servicio_api.dart';
 import '../utils/sesion_helper.dart';
+import '../config/claves_prefs.dart';
+import '../theme/colores.dart';
 import 'pantalla_editar_perfil.dart';
 import 'pantalla_cambiar_contrasena.dart';
 import 'pantalla_mis_planes.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+import '../theme/transiciones.dart';
+import '../widgets/superficie.dart';
 
 class PantallaPerfil extends StatefulWidget {
   final String token;
@@ -53,15 +57,18 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   // Carga la foto guardada en SharedPreferences al abrir el perfil
   Future<void> _cargarFotoGuardada() async {
     final prefs = await SharedPreferences.getInstance();
+    // El usuario pudo navegar hacia atras mientras leiamos las prefs; sin esta
+    // guarda setState revienta con "called after dispose".
+    if (!mounted) return;
     if (kIsWeb) {
       // En web se guarda como base64 porque Image.file no existe
-      final base64Str = prefs.getString('foto_perfil_web_${_datosUsuario['id']}');
+      final base64Str = prefs.getString(ClavesPrefs.fotoPerfilWeb(_datosUsuario['id']));
       if (base64Str != null) {
         setState(() => _fotoBytes = base64Decode(base64Str));
       }
     } else {
       // En movil/desktop se guarda la ruta del archivo
-      final fotoGuardada = prefs.getString('foto_perfil_${_datosUsuario['id']}');
+      final fotoGuardada = prefs.getString(ClavesPrefs.fotoPerfil(_datosUsuario['id']));
       if (fotoGuardada != null && File(fotoGuardada).existsSync()) {
         setState(() => _fotoPath = fotoGuardada);
       }
@@ -72,6 +79,8 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   setState(() => _cargandoPlanes = true);
   try {
     final planes = await _servicioApi.obtenerMisPlanes(widget.token);
+    // Guarda tras el await: la pantalla pudo cerrarse durante la peticion.
+    if (!mounted) return;
     setState(() {
       _planesGuardados = planes;
       _cargandoPlanes = false;
@@ -79,8 +88,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   } on SesionExpiradaException {
     if (mounted) await SesionHelper.manejarSesionExpirada(context);
   } catch (e) {
+    if (!mounted) return;
     setState(() => _cargandoPlanes = false);
-    print('Error cargando planes: $e');
+    if (kDebugMode) {
+      debugPrint('Error cargando planes: $e');
+    }
     }
   }
 
@@ -90,19 +102,24 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
       _cargarHistorial(),
       _cargarPlanesGuardados(),
     ]);
+    // Guarda tras esperar las tres peticiones.
+    if (!mounted) return;
     setState(() => _cargando = false);
   }
 
   Future<void> _cargarPerfil() async {
     try {
       final perfil = await _servicioApi.obtenerPerfil(widget.token);
+      if (!mounted) return;
       setState(() {
         _datosUsuario = perfil;
       });
     } on SesionExpiradaException {
       if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
-      print('Error cargando perfil: $e');
+      if (kDebugMode) {
+        debugPrint('Error cargando perfil: $e');
+      }
     }
   }
 
@@ -110,6 +127,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     setState(() => _cargandoHistorial = true);
     try {
       final historial = await _servicioApi.obtenerHistorial(widget.token);
+      if (!mounted) return;
       setState(() {
         _historial = historial;
         _cargandoHistorial = false;
@@ -117,8 +135,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     } on SesionExpiradaException {
       if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
+      if (!mounted) return;
       setState(() => _cargandoHistorial = false);
-      print('Error cargando historial: $e');
+      if (kDebugMode) {
+        debugPrint('Error cargando historial: $e');
+      }
     }
   }
 
@@ -126,7 +147,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Superficies.radioTarjeta)),
         title: const Text('Cerrar sesión'),
         content: const Text('¿Estás seguro de que deseas cerrar sesión?'),
         actions: [
@@ -140,7 +161,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
               await SesionHelper.cerrarSesion(context);
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colores.error,
               foregroundColor: Colors.white,
             ),
             child: const Text('Cerrar sesión'),
@@ -153,8 +174,8 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   void _editarPerfil() async {
     final resultado = await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PantallaEditarPerfil(
+      RutaModal(
+        pagina: PantallaEditarPerfil(
           token: widget.token,
           datosUsuario: _datosUsuario,
         ),
@@ -169,8 +190,8 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   void _cambiarContrasena() async {
     final resultado = await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PantallaCambiarContrasena(token: widget.token),
+      RutaModal(
+        pagina: PantallaCambiarContrasena(token: widget.token),
       ),
     );
     if (resultado == true) {
@@ -182,7 +203,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(mensaje),
-        backgroundColor: isError ? Colors.red : Colors.green,
+        backgroundColor: isError ? Colores.error : Colores.exitoOscuro,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -191,9 +212,9 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
+      backgroundColor: Colores.fondoApp,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
+        backgroundColor: Colores.primario,
         foregroundColor: Colors.white,
         elevation: 0,
         title: const Text(
@@ -215,7 +236,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
       ),
       body: _cargando
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFF1A1FC8)),
+              child: CircularProgressIndicator(color: Colores.primario),
             )
           : RefreshIndicator(
               onRefresh: _cargarDatosCompletos,
@@ -227,8 +248,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(24),
+                      // Esquinas inferiores redondeadas, igual que en
+                      // seleccion e historial: la cabecera se lee como panel
+                      // apoyado sobre el contenido, no como franja pegada.
                       decoration: const BoxDecoration(
-                        color: Color(0xFF1A1FC8),
+                        color: Colores.primario,
                         borderRadius: BorderRadius.only(
                           bottomLeft: Radius.circular(30),
                           bottomRight: Radius.circular(30),
@@ -247,7 +271,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                                   shape: BoxShape.circle,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
+                                      color: Colores.primario.withValues(alpha: 0.22),
                                       blurRadius: 10,
                                       offset: const Offset(0, 4),
                                     ),
@@ -265,13 +289,13 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                                               ? Image.network(
                                                   _datosUsuario['foto_url'],
                                                   fit: BoxFit.cover,
-                                                  errorBuilder: (_, __, ___) => Container(
-                                                    color: const Color(0xFF00D4FF),
+                                                  errorBuilder: (_, _, _) => Container(
+                                                    color: Colores.acentoCian,
                                                     child: const Icon(Icons.person, size: 50, color: Colors.white),
                                                   ),
                                                 )
                                               : Container(
-                                                  color: const Color(0xFF00D4FF),
+                                                  color: Colores.acentoCian,
                                                   child: const Icon(Icons.person, size: 50, color: Colors.white),
                                                 ),
                                 ),
@@ -284,7 +308,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                                   child: Container(
                                     padding: const EdgeInsets.all(4),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF4ADE00),
+                                      color: Colores.exito,
                                       shape: BoxShape.circle,
                                       border: Border.all(color: Colors.white, width: 2),
                                     ),
@@ -312,7 +336,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                             _datosUsuario['email'] ?? 'usuario@utb.edu.co',
                             style: const TextStyle(
                               fontSize: 14,
-                              color: Color(0xFFADB5FF),
+                              color: Colores.primarioSuave,
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -322,7 +346,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                               vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
+                              color: Colors.white.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Text(
@@ -346,7 +370,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                             child: _buildActionButton(
                               icon: Icons.edit_rounded,
                               label: 'Editar perfil',
-                              color: const Color(0xFF1A1FC8),
+                              color: Colores.primario,
                               onTap: _editarPerfil,
                             ),
                           ),
@@ -355,7 +379,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                             child: _buildActionButton(
                               icon: Icons.lock_rounded,
                               label: 'Cambiar contraseña',
-                              color: const Color(0xFF00D4FF),
+                              // El oscuro y no acentoCian: este color pinta
+                              // texto e icono sobre un fondo tintado muy
+                              // claro, y ahi el claro daba 1.6:1. Con este
+                              // sube a 5.5:1.
+                              color: Colores.acentoCianOscuro,
                               onTap: _cambiarContrasena,
                             ),
                           ),
@@ -364,65 +392,71 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                     ),
 
                     // Información de cuenta
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Text(
-                              'Información de la cuenta',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                    Revelar(
+                      indice: 0,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
+                          boxShadow: [
+                            BoxShadow(
+                              // Tinta azulada, no negra: sobre un fondo con
+                              // color el negro deja un halo gris sucio.
+                              color: Colores.primario.withValues(alpha: 0.07),
+                              blurRadius: 36,
+                              offset: const Offset(0, 14),
+                              spreadRadius: -10,
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Text(
+                                'Información de la cuenta',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colores.textoTitulo,
+                                ),
                               ),
                             ),
-                          ),
-                          const Divider(height: 1),
-                          _buildInfoRow(
-                            icon: Icons.person_outline,
-                            label: 'Nombre completo',
-                            value: _datosUsuario['nombre_completo'] ?? 'No especificado',
-                            onTap: _editarPerfil,
-                          ),
-                          _buildInfoRow(
-                            icon: Icons.email_outlined,
-                            label: 'Correo electrónico',
-                            value: _datosUsuario['email'] ?? 'No especificado',
-                            onTap: _editarPerfil,
-                          ),
-                          _buildInfoRow(
-                            icon: Icons.calendar_today_rounded,
-                            label: 'Fecha de registro',
-                            value: _formatearFecha(_datosUsuario['created_at']),
-                          ),
-                          _buildInfoRow(
-                            icon: Icons.school_rounded,
-                            label: 'Planes guardados',
-                            value: _cargandoPlanes ? '...' : '${_planesGuardados.length}',
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => PantallaMisPlanes(token: widget.token),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
+                            const Divider(height: 1),
+                            _buildInfoRow(
+                              icon: Icons.person_outline,
+                              label: 'Nombre completo',
+                              value: _datosUsuario['nombre_completo'] ?? 'No especificado',
+                              onTap: _editarPerfil,
+                            ),
+                            _buildInfoRow(
+                              icon: Icons.email_outlined,
+                              label: 'Correo electrónico',
+                              value: _datosUsuario['email'] ?? 'No especificado',
+                              onTap: _editarPerfil,
+                            ),
+                            _buildInfoRow(
+                              icon: Icons.calendar_today_rounded,
+                              label: 'Fecha de registro',
+                              value: _formatearFecha(_datosUsuario['created_at']),
+                            ),
+                            _buildInfoRow(
+                              icon: Icons.school_rounded,
+                              label: 'Planes guardados',
+                              value: _cargandoPlanes ? '...' : '${_planesGuardados.length}',
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  RutaDesvanecido(
+                                    pagina: PantallaMisPlanes(token: widget.token),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
 
@@ -434,12 +468,15 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                         margin: const EdgeInsets.symmetric(horizontal: 16),
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 10,
-                              offset: const Offset(0, 2),
+                              // Tinta azulada, no negra: sobre un fondo con
+                              // color el negro deja un halo gris sucio.
+                              color: Colores.primario.withValues(alpha: 0.07),
+                              blurRadius: 36,
+                              offset: const Offset(0, 14),
+                              spreadRadius: -10,
                             ),
                           ],
                         ),
@@ -453,7 +490,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF1A1A2E),
+                                  color: Colores.textoTitulo,
                                 ),
                               ),
                             ),
@@ -466,36 +503,42 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                     const SizedBox(height: 16),
 
                     // Historial de actividades
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Text(
-                              'Actividad reciente',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
+                    Revelar(
+                      indice: 1,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
+                          boxShadow: [
+                            BoxShadow(
+                              // Tinta azulada, no negra: sobre un fondo con
+                              // color el negro deja un halo gris sucio.
+                              color: Colores.primario.withValues(alpha: 0.07),
+                              blurRadius: 36,
+                              offset: const Offset(0, 14),
+                              spreadRadius: -10,
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Text(
+                                'Actividad reciente',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colores.textoTitulo,
+                                ),
                               ),
                             ),
-                          ),
-                          const Divider(height: 1),
-                          _buildHistorialList(),
-                        ],
+                            const Divider(height: 1),
+                            _buildHistorialList(),
+                          ],
+                        ),
                       ),
                     ),
 
@@ -513,25 +556,41 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return InkWell(
+    // Presionable en vez de InkWell: el destello de Material se ve
+    // generico; hundir el boton da respuesta fisica al dedo.
+    return Presionable(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      escala: 0.95,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
+          color: color.withValues(alpha: 0.09),
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          border: Border.all(color: color.withValues(alpha: 0.20)),
         ),
         child: Column(
           children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(height: 4),
+            // El icono en su propio circulo, mismo patron que el resto
+            // de la app en vez de un icono suelto.
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 19),
+            ),
+            const SizedBox(height: 7),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 11.5,
                 color: color,
-                fontWeight: FontWeight.w500,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.1,
               ),
             ),
           ],
@@ -546,23 +605,26 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     required String value,
     VoidCallback? onTap,
   }) {
-    return InkWell(
+    return Presionable(
       onTap: onTap,
+      escala: 0.985,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 38,
+              height: 38,
               decoration: BoxDecoration(
-                color: const Color(0xFF1A1FC8).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
+                color: Colores.primario.withValues(alpha: 0.09),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(
+                    color: Colores.primario.withValues(alpha: 0.16)),
               ),
               child: Icon(
                 icon,
                 size: 20,
-                color: const Color(0xFF1A1FC8),
+                color: Colores.primario,
               ),
             ),
             const SizedBox(width: 12),
@@ -574,7 +636,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                     label,
                     style: const TextStyle(
                       fontSize: 12,
-                      color: Color(0xFF6B7280),
+                      color: Colores.textoSecundario,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -583,7 +645,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
-                      color: Color(0xFF1A1A2E),
+                      color: Colores.textoTitulo,
                     ),
                   ),
                 ],
@@ -593,7 +655,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
               const Icon(
                 Icons.chevron_right_rounded,
                 size: 20,
-                color: Color(0xFF9CA3AF),
+                color: Colores.textoTenue,
               ),
           ],
         ),
@@ -606,7 +668,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
       return const Padding(
         padding: EdgeInsets.all(32),
         child: Center(
-          child: CircularProgressIndicator(color: Color(0xFF1A1FC8)),
+          child: CircularProgressIndicator(color: Colores.primario),
         ),
       );
     }
@@ -617,11 +679,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
         child: Center(
           child: Column(
             children: [
-              Icon(Icons.folder_open, size: 48, color: Color(0xFFD1D5DB)),
+              Icon(Icons.folder_open, size: 48, color: Colores.borde),
               SizedBox(height: 12),
               Text(
                 'No hay planes guardados',
-                style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)),
+                style: TextStyle(fontSize: 14, color: Colores.textoTenue),
               ),
             ],
           ),
@@ -633,7 +695,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     return Column(
       children: ultimosPlanes.map((plan) {
         return ListTile(
-          leading: const Icon(Icons.school_rounded, color: Color(0xFF1A1FC8)),
+          leading: const Icon(Icons.school_rounded, color: Colores.primario),
           title: Text(
                   plan['nombre'] != null && plan['nombre'].toString().trim().isNotEmpty
                       ? '${plan['id']}. ${plan['nombre']}'
@@ -641,11 +703,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF1A1A2E),
+                    color: Colores.textoTitulo,
                   ),
                 ),
           subtitle: Text('Creado: ${_formatearFecha(plan['created_at'])}'),
-          // trailing: const Icon(Icons.visibility_rounded, color: Color(0xFF1A1FC8)),
+          // trailing: const Icon(Icons.visibility_rounded, color: Colores.primario),
           onTap: () {
             // Ver plan guardado
           },
@@ -659,7 +721,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
       return const Padding(
         padding: EdgeInsets.all(32),
         child: Center(
-          child: CircularProgressIndicator(color: Color(0xFF1A1FC8)),
+          child: CircularProgressIndicator(color: Colores.primario),
         ),
       );
     }
@@ -670,11 +732,11 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
         child: Center(
           child: Column(
             children: [
-              Icon(Icons.history_rounded, size: 48, color: Color(0xFFD1D5DB)),
+              Icon(Icons.history_rounded, size: 48, color: Colores.borde),
               SizedBox(height: 12),
               Text(
                 'No hay actividad reciente',
-                style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)),
+                style: TextStyle(fontSize: 14, color: Colores.textoTenue),
               ),
             ],
           ),
@@ -690,7 +752,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: _getAccionColor(item['accion']).withOpacity(0.1),
+              color: _getAccionColor(item['accion']).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
@@ -705,7 +767,7 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
               : null,
           trailing: Text(
             _formatearHora(item['fecha']),
-            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+            style: const TextStyle(fontSize: 11, color: Colores.textoTenue),
           ),
         );
       }).toList(),
@@ -733,16 +795,21 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
           // En web Image.file no funciona, se guardan los bytes como base64
           final bytes = await image.readAsBytes();
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('foto_perfil_web_${_datosUsuario['id']}', base64Encode(bytes));
+          await prefs.setString(ClavesPrefs.fotoPerfilWeb(_datosUsuario['id']), base64Encode(bytes));
+          // Guarda tras el await: el picker y la escritura en prefs son lentos
+          // y el usuario pudo cerrar la pantalla mientras tanto.
+          if (!mounted) return;
           setState(() => _fotoBytes = bytes);
         } else {
           // En movil/desktop se guarda la ruta y se persiste
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('foto_perfil_${_datosUsuario['id']}', image.path);
+          await prefs.setString(ClavesPrefs.fotoPerfil(_datosUsuario['id']), image.path);
+          if (!mounted) return;
           setState(() => _fotoPath = image.path);
         }
       }
     } catch (e) {
+      if (!mounted) return;
       _mostrarSnackbar('Error al seleccionar imagen', isError: true);
     }
   }
@@ -751,10 +818,12 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
     final prefs = await SharedPreferences.getInstance();
     // Se limpia la clave correcta segun la plataforma
     if (kIsWeb) {
-      await prefs.remove('foto_perfil_web_${_datosUsuario['id']}');
+      await prefs.remove(ClavesPrefs.fotoPerfilWeb(_datosUsuario['id']));
     } else {
-      await prefs.remove('foto_perfil_${_datosUsuario['id']}');
+      await prefs.remove(ClavesPrefs.fotoPerfil(_datosUsuario['id']));
     }
+    // Guarda tras los awaits sobre prefs.
+    if (!mounted) return;
     setState(() {
       _fotoPath = null;
       _fotoBytes = null;
@@ -787,8 +856,9 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('Eliminar foto', style: TextStyle(color: Colors.red)),
+              leading: const Icon(Icons.delete_outline_rounded, color: Colores.error),
+              title: const Text('Eliminar foto',
+                  style: TextStyle(color: Colores.error)),
               onTap: () {
                 Navigator.pop(context);
                 _eliminarFoto();
@@ -845,15 +915,15 @@ class _PantallaPerfilState extends State<PantallaPerfil> {
   Color _getAccionColor(String accion) {
     switch (accion) {
       case 'login':
-        return const Color(0xFF4ADE00);
+        return Colores.exito;
       case 'registro':
-        return const Color(0xFF1A1FC8);
+        return Colores.primario;
       case 'generar_plan':
-        return const Color(0xFF00D4FF);
+        return Colores.acentoCian;
       case 'actualizar_perfil':
-        return const Color(0xFFF59E0B);
+        return Colores.advertenciaFuerte;
       default:
-        return const Color(0xFF6B7280);
+        return Colores.textoSecundario;
     }
   }
 

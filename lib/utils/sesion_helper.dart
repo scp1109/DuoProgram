@@ -7,14 +7,21 @@
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config/claves_prefs.dart';
 import '../services/servicio_api.dart';
 import '../screens/pantalla_inicio.dart';
+import '../theme/transiciones.dart';
+import '../theme/colores.dart';
 
 class SesionHelper {
   static Future<void> limpiarCredenciales() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('token');
-    await prefs.remove('user_data');
+    // Se recorre la lista de ClavesPrefs en vez de borrar clave por
+    // clave: asi, si mañana se agrega otro dato de sesion, se limpia
+    // solo con agregarlo alla y no se queda colgado en el dispositivo.
+    for (final clave in ClavesPrefs.clavesDeSesion) {
+      await prefs.remove(clave);
+    }
   }
 
   static Future<void> cerrarSesion(BuildContext context) async {
@@ -22,7 +29,7 @@ class SesionHelper {
     if (!context.mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => const PantallaInicio()),
+      RutaRaiz(pagina: const PantallaInicio()),
       (route) => false,
     );
   }
@@ -35,12 +42,12 @@ class SesionHelper {
         content: Text(
           'Tu sesion ha vencido. Inicia sesion de nuevo para continuar.',
         ),
-        backgroundColor: Colors.red,
+        backgroundColor: Colores.error,
       ),
     );
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => const PantallaInicio()),
+      RutaRaiz(pagina: const PantallaInicio()),
       (route) => false,
     );
   }

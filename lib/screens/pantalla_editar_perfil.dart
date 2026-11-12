@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/servicio_api.dart';
 import '../utils/sesion_helper.dart';
+import '../theme/colores.dart';
+import '../widgets/superficie.dart';
 
 class PantallaEditarPerfil extends StatefulWidget {
   final String token;
@@ -71,83 +73,117 @@ class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
+      backgroundColor: Colores.fondoApp,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colores.primario,
         elevation: 0,
-        title: const Text('Editar Perfil'),
+        scrolledUnderElevation: 0,
+        title: const Text('Editar perfil',
+            style: TextStyle(
+                color: Colores.textoTitulo,
+                fontWeight: FontWeight.w700,
+                fontSize: 17,
+                letterSpacing: -0.3)),
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  children: [
-                    TextFormField(
-                      controller: _nombreController,
-                      decoration: const InputDecoration(
-                        labelText: 'Nombre completo',
-                        prefixIcon: Icon(Icons.person_outline),
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Ingresa tu nombre';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _correoController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Correo electrónico',
-                        prefixIcon: Icon(Icons.email_outlined),
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Ingresa tu correo';
-                        }
-                        if (!value.contains('@')) {
-                          return 'Correo inválido';
-                        }
-                        return null;
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: _cargando ? null : _guardarCambios,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1A1FC8),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Revelar(child: Cejilla('Tus datos')),
+                const SizedBox(height: 12),
+                const Revelar(
+                  indice: 1,
+                  child: Text(
+                    'Actualiza tu información',
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.9,
+                      height: 1.1,
+                      color: Colores.textoTitulo,
                     ),
                   ),
-                  child: _cargando
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text('Guardar cambios', style: TextStyle(fontSize: 16, color: Colors.white))
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                const Revelar(
+                  indice: 2,
+                  child: Text(
+                    'Estos datos son los que aparecen en tus planes guardados.',
+                    style: TextStyle(
+                        fontSize: 14,
+                        height: 1.45,
+                        color: Colores.textoSecundario),
+                  ),
+                ),
+
+                const SizedBox(height: 28),
+
+                Revelar(
+                  indice: 3,
+                  child: TarjetaBisel(
+                    padding: const EdgeInsets.fromLTRB(18, 22, 18, 22),
+                    child: Column(
+                      children: [
+                        TextFormField(
+                          controller: _nombreController,
+                          decoration: const InputDecoration(
+                            labelText: 'Nombre completo',
+                            prefixIcon: Icon(Icons.person_outline_rounded,
+                                size: 20, color: Colores.primario),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Ingresa tu nombre';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _correoController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: const InputDecoration(
+                            labelText: 'Correo electrónico',
+                            prefixIcon: Icon(Icons.alternate_email_rounded,
+                                size: 20, color: Colores.primario),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Ingresa tu correo';
+                            }
+                            if (!value.contains('@')) {
+                              return 'Correo inválido';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 26),
+
+                Revelar(
+                  indice: 4,
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: BotonIsla(
+                      texto: 'Guardar cambios',
+                      icono: Icons.check_rounded,
+                      cargando: _cargando,
+                      onTap: _cargando ? null : _guardarCambios,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

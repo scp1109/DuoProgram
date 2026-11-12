@@ -13,6 +13,10 @@ import '../screens/pantalla_perfil.dart';
 import '../screens/pantalla_mis_planes.dart';
 import '../screens/pantalla_seleccion.dart';
 import '../utils/sesion_helper.dart';
+import '../config/claves_prefs.dart';
+import '../theme/colores.dart';
+import '../theme/transiciones.dart';
+import '../widgets/superficie.dart';
 
 // Este widget crea el menu lateral que aparece en varias pantallas de la app.
 // Es StatefulWidget porque necesita cargar la foto guardada del usuario.
@@ -74,7 +78,7 @@ class _MenuLateralState extends State<MenuLateral> {
 
     if (kIsWeb) { // kIsWeb: constante de Flutter que indica si la app está corriendo en navegador web
       // En web la foto se guardo como texto base64.
-      final base64Str = prefs.getString('foto_perfil_web_$userId');
+      final base64Str = prefs.getString(ClavesPrefs.fotoPerfilWeb(userId));
       if (!mounted) return;
       setState(() {
         // Si existe una foto, se convierte de base64 a bytes para mostrarla.
@@ -83,7 +87,7 @@ class _MenuLateralState extends State<MenuLateral> {
       });
     } else {
       // En celular/escritorio se guarda la ruta del archivo.
-      final fotoGuardada = prefs.getString('foto_perfil_$userId');
+      final fotoGuardada = prefs.getString(ClavesPrefs.fotoPerfil(userId));
       // Antes de mostrarla se revisa que el archivo exista.
       final existe = fotoGuardada != null && File(fotoGuardada).existsSync();
       if (!mounted) return;
@@ -97,7 +101,7 @@ class _MenuLateralState extends State<MenuLateral> {
   // Avatar por defecto cuando el usuario no tiene foto o la foto falla.
   Widget _avatarFallback() {
     return Container(
-      color: const Color(0xFF00D4FF),
+      color: Colores.acentoCian,
       child: const Icon(
         Icons.person,
         size: 40,
@@ -144,15 +148,16 @@ class _MenuLateralState extends State<MenuLateral> {
     // Drawer es el panel lateral que se abre desde el menu hamburguesa.
     return Drawer(
       child: Container(
-        color: const Color(0xFF1A1FC8),
+        decoration: const BoxDecoration(
+          color: Colores.primario,
+        ),
         child: Column(
           children: [
             // Header del drawer: muestra foto, nombre y correo del usuario.
             Container(
               padding: const EdgeInsets.fromLTRB(20, 50, 20, 20),
-              decoration: const BoxDecoration(
-                color: Color(0xFF1A1FC8),
-              ),
+              // Sin color propio: hereda el azul del panel.
+              decoration: const BoxDecoration(),
               child: Column(
                 children: [
                   // Avatar circular del usuario.
@@ -164,7 +169,7 @@ class _MenuLateralState extends State<MenuLateral> {
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.2),
+                          color: Colores.primario.withValues(alpha: 0.22),
                           blurRadius: 10,
                         ),
                       ],
@@ -187,13 +192,13 @@ class _MenuLateralState extends State<MenuLateral> {
                     widget.datosUsuario['email'] ?? 'usuario@utb.edu.co',
                     style: const TextStyle(
                       fontSize: 12,
-                      color: Color(0xFFADB5FF),
+                      color: Colores.primarioSuave,
                     ),
                   ),
                 ],
               ),
             ),
-            const Divider(color: Color(0xFF2D33D4), thickness: 1),
+            const Divider(color: Colores.primarioClaro, thickness: 1),
             // Opciones del menú
             Expanded(
               child: ListView(
@@ -206,8 +211,8 @@ class _MenuLateralState extends State<MenuLateral> {
                     onTap: () {
                       Navigator.pushAndRemoveUntil(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => PantallaSeleccion(
+                        RutaDesvanecido(
+                          pagina: PantallaSeleccion(
                             token: widget.token,
                             datosUsuario: widget.datosUsuario,
                           ),
@@ -223,8 +228,8 @@ class _MenuLateralState extends State<MenuLateral> {
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => PantallaPerfil(
+                        RutaDesvanecido(
+                          pagina: PantallaPerfil(
                             token: widget.token,
                             datosUsuario: widget.datosUsuario,
                           ),
@@ -239,13 +244,13 @@ class _MenuLateralState extends State<MenuLateral> {
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => PantallaMisPlanes(token: widget.token),
+                        RutaDesvanecido(
+                          pagina: PantallaMisPlanes(token: widget.token),
                         ),
                       );
                     },
                   ),
-                  const Divider(color: Color(0xFF2D33D4), thickness: 1),
+                  const Divider(color: Colores.primarioClaro, thickness: 1),
                   _buildMenuItem(
                     context,
                     icon: Icons.logout_rounded,
@@ -265,7 +270,7 @@ class _MenuLateralState extends State<MenuLateral> {
                 'DuoProgram v1.0',
                 style: TextStyle(
                   fontSize: 12,
-                  color: Color(0xFF6B7280),
+                  color: Colores.textoSecundario,
                 ),
               ),
             ),
@@ -282,24 +287,55 @@ class _MenuLateralState extends State<MenuLateral> {
     required VoidCallback onTap,
     bool isDestructive = false,
   }) {
-    return ListTile(
-      leading: Icon(
-        icon,
-        color: isDestructive ? Colors.red : const Color(0xFF00D4FF),
-      ),
-      title: Text(
-        title,
-        style: TextStyle(
-          color: isDestructive ? Colors.red : Colors.white,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
+    final acento = isDestructive ? Colores.error : Colores.acentoCian;
+    // Presionable en vez de ListTile: el destello de Material sobre el azul
+    // oscuro del menu se ve como una mancha gris. Hundir la fila da
+    // respuesta al dedo sin ensuciar el fondo.
+    return Presionable(
       onTap: () {
         Navigator.pop(context); // Cerrar drawer
         onTap();
       },
-      hoverColor: const Color(0xFF2D33D4),
-      splashColor: const Color(0xFF2D33D4),
+      escala: 0.97,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(Superficies.radioInterior),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+          ),
+          child: Row(
+            children: [
+              // El icono en su propio circulo, mismo patron que el resto.
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: acento.withValues(alpha: 0.16),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 18, color: acento),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: isDestructive ? Colores.error : Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14.5,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded,
+                  size: 18, color: Colors.white.withValues(alpha: 0.35)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -307,7 +343,8 @@ class _MenuLateralState extends State<MenuLateral> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Superficies.radioTarjeta)),
         title: const Text('Cerrar sesión'),
         content: const Text('¿Estás seguro de que deseas cerrar sesión?'),
         actions: [
@@ -321,7 +358,7 @@ class _MenuLateralState extends State<MenuLateral> {
               await SesionHelper.cerrarSesion(context);
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: Colores.error,
               foregroundColor: Colors.white,
             ),
             child: const Text('Cerrar sesión'),

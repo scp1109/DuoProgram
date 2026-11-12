@@ -6,27 +6,32 @@
 // ============================================================
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // kDebugMode, debugPrint
 import '../services/servicio_api.dart';
 import '../data/datos_programa.dart';
 import 'pantalla_historial.dart';
 import '../widgets/menu_lateral.dart';
+import '../theme/colores.dart';
+import '../theme/transiciones.dart';
+import '../widgets/superficie.dart';
+import '../theme/movimiento.dart';
 
 const Map<String, Map<String, dynamic>> _metadatosUI = {
   'ISCO': {
     'icono': Icons.computer_rounded,
-    'color': Color(0xFF1A1FC8),
+    'color': Colores.primario,
   },
   'IIND': {
     'icono': Icons.business_center_rounded,
-    'color': Color(0xFF00D4FF),
+    'color': Colores.acentoCian,
   },
   'IMEC': {
     'icono': Icons.settings_rounded,
-    'color': Color(0xFF7C3AED),
+    'color': Colores.acentoMorado,
   },
   'CDAT': {
     'icono': Icons.bar_chart_rounded,
-    'color': Color(0xFFEA580C),
+    'color': Colores.acentoNaranja,
   },
 };
 
@@ -84,11 +89,15 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
 
     try {
       final programas = await _servicioApi.obtenerProgramas();
+      // El usuario pudo navegar hacia atras mientras la peticion estaba en
+      // vuelo; sin esta guarda setState revienta con "called after dispose".
+      if (!mounted) return;
       setState(() {
         _programas = programas;
         _cargando = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _cargando = false;
@@ -114,6 +123,18 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
     // Obtener malla completa desde la BD via API
     final programa = await _fetchPrograma(data);
 
+    // Guarda tras el await: el usuario pudo salir de la pantalla.
+    if (!mounted) return;
+
+    // Si la malla no se pudo cargar NO seleccionamos el programa. Antes se
+    // devolvia un Programa con materias vacias y la app seguia como si nada:
+    // el usuario llegaba al wizard de historial con una malla vacia y
+    // generaba un plan sin sentido sin entender por que.
+    if (programa == null) {
+      _mostrarErrorMalla(data['nombre'] as String? ?? codigo);
+      return;
+    }
+
     if (_programa1 == null) {
       setState(() => _programa1 = programa);
     } else if (_programa2 == null) {
@@ -126,22 +147,34 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
     }
   }
 
+  // Avisa al usuario de que la malla no se pudo traer del backend.
+  void _mostrarErrorMalla(String nombrePrograma) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: Colores.error,
+        duration: const Duration(seconds: 4),
+        content: Text(
+          'No se pudo cargar la malla de $nombrePrograma. '
+          'Revisa tu conexion e intenta de nuevo.',
+        ),
+      ),
+    );
+  }
+
   // Obtiene la malla completa del programa desde el backend.
   // Antes buscaba en programasDisponibles de datos_programa.dart (local).
-  Future<Programa> _fetchPrograma(Map<String, dynamic> data) async {
+  // Devuelve null si la peticion falla: el fallo tiene que ser visible, asi
+  // que quien llama decide que hacer en vez de recibir una malla vacia.
+  Future<Programa?> _fetchPrograma(Map<String, dynamic> data) async {
     final codigo = data['codigo'] as String;
     try {
       final detalle = await _servicioApi.obtenerDetallePrograma(codigo);
       return Programa.fromJson(detalle);
     } catch (e) {
-      print('[ERROR] No se pudo cargar malla de $codigo desde BD: $e');
-      // Fallback: programa vacio para no bloquear la UI
-      return Programa(
-        codigo:   codigo,
-        nombre:   data['nombre'] as String,
-        facultad: data['facultad'] as String,
-        materias: [],
-      );
+      if (kDebugMode) {
+        debugPrint('[ERROR] No se pudo cargar malla de $codigo desde BD: $e');
+      }
+      return null;
     }
   }
 
@@ -163,14 +196,11 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
 
   void _continuar() {
     if (!_ambosSeleccionados) return;
-    print('[DEBUG] Continuando con: ${_programa1!.nombre} y ${_programa2!.nombre}');
-    print('[DEBUG] Materias programa1: ${_programa1!.materias.length}');
-    print('[DEBUG] Materias programa2: ${_programa2!.materias.length}');
-    
+
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => PantallaHistorial(
+      RutaProfundidad(
+        pagina: PantallaHistorial(
           programa: _programa1!,
           programaSecundario: _programa2!,
           token: widget.token ?? '',
@@ -183,19 +213,26 @@ class _PantallaSeleccionState extends State<PantallaSeleccion> {
 @override
 Widget build(BuildContext context) {
   return Scaffold(
-    backgroundColor: const Color(0xFFF0F2FF),
+    backgroundColor: Colores.fondoApp,
     drawer: MenuLateral(
       token: widget.token ?? '',
       datosUsuario: widget.datosUsuario ?? {},
     ), 
+      // El AppBar no lleva color propio: el panel de abajo pinta el
+      // fondo de toda la zona superior, asi no hay costura entre los dos.
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
+        backgroundColor: Colores.primario,
         foregroundColor: Colors.white,
         elevation: 0,
+        scrolledUnderElevation: 0,
         title: const Text(
           'Selecciona tus Programas',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        )
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 17,
+            letterSpacing: -0.3,
+          ),
+        ),
       ),
       body: _cargando
           ? const Center(
@@ -203,12 +240,12 @@ Widget build(BuildContext context) {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   CircularProgressIndicator(
-                    color: Color(0xFF1A1FC8),
+                    color: Colores.primario,
                   ),
                   SizedBox(height: 16),
                   Text(
                     'Cargando programas...',
-                    style: TextStyle(color: Color(0xFF6B7280)),
+                    style: TextStyle(color: Colores.textoSecundario),
                   ),
                 ],
               ),
@@ -224,13 +261,13 @@ Widget build(BuildContext context) {
                           width: 80,
                           height: 80,
                           decoration: BoxDecoration(
-                            color: Colors.red.shade50,
+                              color: Colores.error.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(40),
                           ),
                           child: const Icon(
                             Icons.error_outline,
                             size: 40,
-                            color: Colors.red,
+                              color: Colores.error,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -239,7 +276,7 @@ Widget build(BuildContext context) {
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1A2E),
+                              color: Colores.textoTitulo,
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -250,28 +287,28 @@ Widget build(BuildContext context) {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF6B7280),
+                                color: Colores.textoSecundario,
                             ),
                           ),
                         ),
                         const SizedBox(height: 24),
                         const Text(
                           'Asegúrate que el backend esté corriendo en:',
-                          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                          style: TextStyle(fontSize: 12, color: Colores.textoTenue),
                         ),
                         const Text(
                           'http://127.0.0.1:8000',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1FC8),
+                              color: Colores.primario,
                           ),
                         ),
                         const SizedBox(height: 24),
                         ElevatedButton(
                           onPressed: _cargarProgramas,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1A1FC8),
+                            backgroundColor: Colores.primario,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 32,
                               vertical: 12,
@@ -293,32 +330,41 @@ Widget build(BuildContext context) {
                   children: [
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-                      color: const Color(0xFF1A1FC8),
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+                      decoration: const BoxDecoration(
+                        color: Colores.primario,
+                        // Esquinas inferiores redondeadas: la cabecera deja
+                        // de ser una franja pegada y pasa a leerse como un
+                        // panel apoyado sobre el contenido.
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(28),
+                          bottomRight: Radius.circular(28),
+                        ),
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
                             'Selecciona 2 programas',
                             style: TextStyle(
-                                color: Colors.white,
+                                  color: Colors.white,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 4),
                           const Text(
                             'Elige tu programa principal y el secundario para planificar tu doble programa.',
-                            style: TextStyle(color: Color(0xFFADB5FF), fontSize: 13),
+                            style: TextStyle(color: Colores.primarioSuave, fontSize: 13),
                           ),
                           const SizedBox(height: 14),
                           Row(
                             children: [
                               Expanded(child: _BadgeSlot(
                                 label: 'Programa 1',
-                                nombre: _nombrePrograma1,
+                                  nombre: _nombrePrograma1,
                                 seleccionado: _programa1 != null,
-                                color: _programa1 != null
-                                    ? (_metadatosUI[_programa1!.codigo]?['color'] as Color? ?? const Color(0xFF1A1FC8))
+                                  color: _programa1 != null
+                                    ? (_metadatosUI[_programa1!.codigo]?['color'] as Color? ?? Colores.primario)
                                     : null,
                               )),
                               Padding(
@@ -330,14 +376,14 @@ Widget build(BuildContext context) {
                                     width: 36,
                                     height: 36,
                                     decoration: BoxDecoration(
-                                      color: (_programa1 != null || _programa2 != null)
-                                          ? const Color(0xFF00D4FF)
-                                          : const Color(0xFF2D33D4),
+                                        color: (_programa1 != null || _programa2 != null)
+                                          ? Colores.acentoCian
+                                          : Colores.primarioClaro,
                                       borderRadius: BorderRadius.circular(10),
                                     ),
                                     child: const Icon(
                                       Icons.swap_horiz_rounded,
-                                      color: Colors.white,
+                                        color: Colors.white,
                                       size: 20,
                                     ),
                                   ),
@@ -345,10 +391,10 @@ Widget build(BuildContext context) {
                               ),
                               Expanded(child: _BadgeSlot(
                                 label: 'Programa 2',
-                                nombre: _nombrePrograma2,
+                                  nombre: _nombrePrograma2,
                                 seleccionado: _programa2 != null,
-                                color: _programa2 != null
-                                    ? (_metadatosUI[_programa2!.codigo]?['color'] as Color? ?? const Color(0xFF1A1FC8))
+                                  color: _programa2 != null
+                                    ? (_metadatosUI[_programa2!.codigo]?['color'] as Color? ?? Colores.primario)
                                     : null,
                               )),
                             ],
@@ -362,19 +408,19 @@ Widget build(BuildContext context) {
                         decoration: InputDecoration(
                           hintText: 'Buscar programa...',
                           prefixIcon:
-                              const Icon(Icons.search, color: Color(0xFF9CA3AF)),
+                              const Icon(Icons.search, color: Colores.textoTenue),
                           filled: true,
                           fillColor: Colors.white,
                           contentPadding: const EdgeInsets.symmetric(vertical: 0),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide:
-                                const BorderSide(color: Color(0xFFE5E7EB)),
+                                const BorderSide(color: Colores.bordeSuave),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: const BorderSide(
-                                color: Color(0xFF1A1FC8), width: 2),
+                                  color: Colores.primario, width: 2),
                           ),
                         ),
                       ),
@@ -387,22 +433,25 @@ Widget build(BuildContext context) {
                           final programa = _programas[index];
                           final estado = _estadoPrograma(programa);
                           final ui = _metadatosUI[programa['codigo']] ??
-                              {'icono': Icons.school_rounded, 'color': const Color(0xFF1A1FC8)};
+                              {'icono': Icons.school_rounded, 'color': Colores.primario};
                           
                           final int creditos = _parseInt(programa['total_creditos']);
                           // total_semestres viene del backend; antes estaba
                           // hardcodeado como 10 para todos los programas
                           final int semestres = _parseInt(programa['total_semestres']);
                           
-                          return _ProgramaCard(
-                            nombre: programa['nombre'],
-                            facultad: programa['facultad'],
-                            semestres: semestres,
-                            creditos: creditos,
-                            icono: ui['icono'] as IconData,
-                            color: ui['color'] as Color,
-                            estado: estado,
-                            onTap: () => _seleccionarPrograma(programa),
+                          return Revelar(
+                            indice: index,
+                            child: _ProgramaCard(
+                              nombre: programa['nombre'],
+                              facultad: programa['facultad'],
+                              semestres: semestres,
+                              creditos: creditos,
+                              icono: ui['icono'] as IconData,
+                              color: ui['color'] as Color,
+                              estado: estado,
+                              onTap: () => _seleccionarPrograma(programa),
+                            ),
                           );
                         },
                       ),
@@ -411,26 +460,17 @@ Widget build(BuildContext context) {
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       child: SizedBox(
                         width: double.infinity,
-                        height: 52,
-                        child: ElevatedButton(
-                          onPressed: _ambosSeleccionados ? _continuar : null,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF4ADE00),
-                            disabledBackgroundColor: const Color(0xFFD1D5DB),
-                            foregroundColor: Colors.black,
-                            disabledForegroundColor: const Color(0xFF9CA3AF),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: Text(
-                            _ambosSeleccionados
-                                ? 'Continuar con estos programas'
-                                : 'Selecciona 2 programas para continuar',
-                            style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w600),
-                          ),
+                        child: BotonIsla(
+                          texto: _ambosSeleccionados
+                              ? 'Continuar con estos programas'
+                              : 'Selecciona 2 programas',
+                          color: _ambosSeleccionados
+                              ? Colores.primario
+                              : Colores.borde,
+                          colorTexto: _ambosSeleccionados
+                              ? Colors.white
+                              : Colores.textoSecundario,
+                          onTap: _ambosSeleccionados ? _continuar : null,
                         ),
                       ),
                     ),
@@ -461,8 +501,8 @@ class _BadgeSlot extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: seleccionado
-            ? (color ?? const Color(0xFF1A1FC8)).withOpacity(0.25)
-            : const Color(0xFF2D33D4),
+            ? (color ?? Colores.primario).withValues(alpha: 0.25)
+            : Colores.primarioClaro,
         borderRadius: BorderRadius.circular(10),
         border: seleccionado
             ? Border.all(color: color ?? Colors.white, width: 1.5)
@@ -473,7 +513,7 @@ class _BadgeSlot extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(color: Color(0xFFADB5FF), fontSize: 11),
+            style: const TextStyle(color: Colores.primarioSuave, fontSize: 11),
           ),
           const SizedBox(height: 2),
           Text(
@@ -481,7 +521,7 @@ class _BadgeSlot extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: seleccionado ? Colors.white : const Color(0xFF9CA3AF),
+              color: seleccionado ? Colors.white : Colores.textoTenue,
               fontSize: 12,
               fontWeight:
                   seleccionado ? FontWeight.bold : FontWeight.normal,
@@ -518,93 +558,155 @@ class _ProgramaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool seleccionado = estado > 0;
-    final String etiqueta = estado == 1 ? 'P. Principal' : 'P. Secundario';
+    final String etiqueta = estado == 1 ? 'Principal' : 'Secundario';
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: seleccionado ? color.withOpacity(0.08) : Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: seleccionado ? color : const Color(0xFFE5E7EB),
-          width: seleccionado ? 2 : 1,
+    // Toda la tarjeta responde al tacto, no solo el boton de la derecha:
+    // un area tocable de 36px en la esquina obliga a apuntar.
+    return Presionable(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: Movimiento.corta,
+        curve: Movimiento.principal,
+        margin: const EdgeInsets.only(bottom: 12),
+        // Cascaron exterior del bisel.
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: seleccionado
+              ? color.withValues(alpha: 0.12)
+              : Superficies.brumaLavanda,
+          borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
+          border: Border.all(
+            color: seleccionado
+                ? color.withValues(alpha: 0.45)
+                : Superficies.nieblaAzul.withValues(alpha: 0.6),
+          ),
+          // La sombra se enciende al seleccionar: la tarjeta se despega
+          // del fondo en vez de solo cambiar de color.
+          boxShadow: seleccionado ? Superficies.sutil : Superficies.ambiente,
         ),
-      ),
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Container(
-          width: 48,
-          height: 48,
+        child: AnimatedContainer(
+          duration: Movimiento.corta,
+          curve: Movimiento.principal,
+          // Nucleo interior con radio concentrico: el radio exterior
+          // menos el grosor del marco, si no la curva se ve apretada.
           decoration: BoxDecoration(
-            color: color.withOpacity(seleccionado ? 0.2 : 0.10),
-            borderRadius: BorderRadius.circular(12),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(
+                Superficies.radioInterno(Superficies.radioTarjeta, 5)),
           ),
-          child: Icon(icono, color: color, size: 26),
-        ),
-        title: Text(
-          nombre,
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 15,
-            color: seleccionado ? color : const Color(0xFF1A1A2E),
-          ),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 2),
-            Text(facultad,
-                style: const TextStyle(
-                    color: Color(0xFF6B7280), fontSize: 12)),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                _infoChip(Icons.calendar_today_rounded,
-                    '$semestres semestres'),
-                const SizedBox(width: 8),
-                _infoChip(Icons.menu_book_rounded, '$creditos creditos'),
-                if (seleccionado) ...[
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        etiqueta,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold),
-                      ),
+          padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+          child: Row(
+            children: [
+              // Icono en su propio bisel, mismo patron a menor escala.
+              AnimatedContainer(
+                duration: Movimiento.corta,
+                curve: Movimiento.principal,
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: seleccionado ? 0.16 : 0.08),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: color.withValues(alpha: seleccionado ? 0.3 : 0.12)),
+                ),
+                child: Icon(icono, color: color, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            nombre,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              height: 1.2,
+                              letterSpacing: -0.2,
+                                color: seleccionado ? color : Colores.textoTitulo,
+                            ),
+                          ),
+                        ),
+                        if (seleccionado) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 3),
+                            decoration: BoxDecoration(
+                                color: color,
+                              borderRadius: BorderRadius.circular(
+                                  Superficies.radioPildora),
+                            ),
+                            child: Text(
+                              etiqueta.toUpperCase(),
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
+                    const SizedBox(height: 3),
+                    Text(
+                      facultad,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colores.textoSecundario, fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _infoChip(Icons.calendar_today_rounded,
+                            '$semestres semestres'),
+                        const SizedBox(width: 10),
+                        _infoChip(Icons.menu_book_rounded, '$creditos cr'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Boton isla en miniatura: circulo, no cuadrado con radio.
+              AnimatedContainer(
+                duration: Movimiento.corta,
+                // OJO: aqui NO va Movimiento.resorte. Esa curva sobrepasa
+                // 1.0 y, al interpolar una sombra, extrapola el blurRadius
+                // a negativo y Flutter lanza un assert. El rebote solo debe
+                // manejar transform (ver la nota en movimiento.dart).
+                curve: Movimiento.principal,
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: seleccionado ? color : Colores.primario,
+                  shape: BoxShape.circle,
+                  // Se interpola contra una sombra de blur 0 y no contra
+                  // null: asi las dos listas tienen la misma forma y el
+                  // lerp no tiene que inventar el estado ausente.
+                  boxShadow:
+                      seleccionado ? Superficies.sutil : Superficies.ninguna,
+                ),
+                child: AnimatedSwitcher(
+                  duration: Movimiento.instante,
+                  child: Icon(
+                    seleccionado ? Icons.check_rounded : Icons.add_rounded,
+                    key: ValueKey(seleccionado),
+                    color: Colors.white,
+                    size: 20,
                   ),
-                ],
-              ],
-            ),
-          ],
-        ),
-        trailing: GestureDetector(
-          onTap: onTap,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: seleccionado ? color : const Color(0xFF1A1FC8),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              seleccionado ? Icons.check_rounded : Icons.add_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -613,12 +715,15 @@ class _ProgramaCard extends StatelessWidget {
 
   Widget _infoChip(IconData icon, String text) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 12, color: const Color(0xFF9CA3AF)),
-        const SizedBox(width: 3),
+        Icon(icon, size: 12, color: Colores.textoTenue),
+        const SizedBox(width: 4),
         Text(text,
             style: const TextStyle(
-                fontSize: 11, color: Color(0xFF9CA3AF))),
+                fontSize: 11,
+                color: Colores.textoTenue,
+                fontWeight: FontWeight.w500)),
       ],
     );
   }

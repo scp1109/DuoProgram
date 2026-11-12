@@ -1,6 +1,9 @@
 // ============================================================
 //  pantalla_historial.dart
-//  Wizard de 4 pasos: Promedio → Inglés → Homologaciones → Historial
+//  Wizard de 3 pasos: Inglés → Homologaciones → Historial
+//  El promedio ya no se pregunta una sola vez al inicio: se pide
+//  dentro de cada semestre, porque el cupo de creditos depende del
+//  promedio con que el estudiante llego a matricular ese semestre.
 //  Conectado al backend FastAPI
 // ============================================================
 
@@ -12,6 +15,12 @@ import '../models/modelo_plan.dart';
 import 'pantalla_planificacion.dart';
 import '../widgets/menu_lateral.dart';
 import '../utils/sesion_helper.dart';
+import '../theme/colores.dart';
+import '../theme/movimiento.dart';
+import '../theme/transiciones.dart';
+import '../widgets/superficie.dart';
+import '../widgets/historial/fila_materia.dart';
+import '../widgets/numero_rodante.dart';
 
 String _norm(String s) {
   const map = <String, String>{
@@ -85,13 +94,23 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   final ServicioApi _servicioApi = ServicioApi();
   bool _isGeneratingPlan = false;
   int _paso = 0;
-  bool _practicaUnica = true;
+  // Se elimino _practicaUnica: el backend ya no acepta `practica_unica`
+  // porque el flag no tenia ningun efecto (una rama muerta descartaba
+  // siempre la practica del programa secundario).
   bool _practicaSola = false;
-  double _promedio = 0.0;
-  // Controla si el usuario ya escribio algo en el campo de promedio.
-  // El mensaje de feedback solo se muestra cuando es true.
-  bool _promedioIngresado = false;
-  final _ctrlPromedio = TextEditingController();
+  // ── Promedio POR SEMESTRE ────────────────────────────────────
+  // Antes habia un unico _promedio global, lo que asumia que el
+  // estudiante mantuvo la misma nota toda la carrera. En la practica
+  // sube y baja: un semestre con 3.8 daba derecho a 18 creditos y el
+  // siguiente con 4.2 a 20. Con un solo valor, la validacion del
+  // historial quedaba mal en casi todos los semestres.
+  //
+  // Regla UTB: el cupo de creditos de un semestre lo define el promedio
+  // con el que el estudiante llego a matricularlo, es decir el del
+  // semestre ANTERIOR. Por eso el promedio del semestre N habilita al
+  // N+1, y el semestre 1 usa un tope fijo (no hay promedio previo).
+  final Map<int, double> _promediosPorSemestre = {};
+  final Map<int, TextEditingController> _ctrlPromedioSem = {};
 
   final Set<int> _inglesHomologados = {};
   final List<HomologacionExterna> _homologacionesExternas = [];
@@ -101,6 +120,12 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   final List<RegistroMateria> _registros = [];
   int _semestresCursados = 1;
   int? _semestreExpandido = 1;
+
+  // Semestre cuyo encabezado esta pulsado ahora mismo. Es estado de
+  // presentacion puro: la escala de presion se aplica a la tarjeta entera,
+  // no solo a la fila que recibe el toque, asi que no puede vivir dentro
+  // de un Presionable local.
+  int? _semestrePresionado;
 
   // ── Cache de materias (inmutable durante esta pantalla) ────────────────────
   // Se construyen una vez en initState; los programas no cambian en esta pantalla.
@@ -117,11 +142,33 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   @override
   void initState() {
     super.initState();
-    // Construir lista unificada principal + secundario (sin duplicados)
+    // Construir lista unificada principal + secundario.
+    //
+    // Una misma materia puede exigir prerrequisitos distintos en cada
+    // programa. Antes se descartaba el duplicado y ganaba la version del
+    // principal, perdiendo los prerrequisitos del secundario. Ahora se
+    // combinan con Materia.combinar, que compara lo que pide cada programa
+    // con la cadena de prerrequisitos del otro: si uno queda dentro de la
+    // cadena del otro se exigen ambas listas, y si no, son caminos
+    // alternativos y basta con uno.
     final lista = [...widget.programa.materias];
     if (widget.programaSecundario != null) {
+      final grafoP = Materia.grafoDe(widget.programa.materias);
+      final grafoS = Materia.grafoDe(widget.programaSecundario!.materias);
+      final memoP = <String, Set<String>>{};
+      final memoS = <String, Set<String>>{};
       for (final m in widget.programaSecundario!.materias) {
-        if (!lista.any((x) => x.codigo == m.codigo)) lista.add(m);
+        final i = lista.indexWhere((x) => x.codigo == m.codigo);
+        if (i < 0) {
+          lista.add(m);
+          continue;
+        }
+        lista[i] = Materia.combinar(
+          lista[i],
+          m,
+          cierreA: Materia.cierre(m.codigo, grafoP, memoP),
+          cierreB: Materia.cierre(m.codigo, grafoS, memoS),
+        );
       }
     }
     _cacheMaterias = List.unmodifiable(lista);
@@ -150,6 +197,20 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     }
   }
 
+  @override
+  void dispose() {
+    // La pantalla no liberaba ningun controlador. Con uno de promedio por
+    // semestre son varios mas, asi que se cierran todos aqui.
+    _ctrlHomolog.dispose();
+    for (final c in _ctrlAdicional.values) {
+      c.dispose();
+    }
+    for (final c in _ctrlPromedioSem.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   // Recalcula el cache de aprobadas para todos los semestres de una vez.
   // O(semestres × registros) total en lugar de O(semestres² × registros) por build.
   void _recalcularAprobadas() {
@@ -166,7 +227,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           // Usar indexMaterias para lookup O(1)
           final mat = _indexMaterias[r.codigo];
           if (mat == null ||
-              mat.prerrequisitos.every((p) => validasAntes.contains(p))) {
+              mat.requisitosCumplidos(validasAntes.contains)) {
             nuevas.add(r.codigo);
             registradasValidas.add(r.codigo);
           }
@@ -201,7 +262,10 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   // Retorna la lista cacheada con electivas incluidas
   List<Materia> get _todasLasMateriasYElectivas => _cacheMateriasYElectivas;
 
-  /// Prerrequisitos de codigos compartidos cuando la BD no los trae (ej. ISCO CBAS_E02A).
+  /// Red de seguridad para codigos cuyo prerrequisito no esta declarado en
+  /// NINGUN programa de la BD. Ya no es la via principal: la union de
+  /// prerrequisitos entre ambas mallas (ver initState) cubre el caso normal
+  /// de que un programa lo declare y el otro no.
   static const Map<String, List<String>> _prerequisitosCanonicos = {
     'CBAS_E02A': ['CBAS_E01A'],
   };
@@ -213,13 +277,14 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     // Merge prereqs del canonico si aplica
     final prereqsExtra = _prerequisitosCanonicos[codigo] ?? const [];
     if (prereqsExtra.isEmpty) return base;
-    final prereqs = {...base.prerrequisitos, ...prereqsExtra}.toList();
-    return Materia(
-      codigo: base.codigo,
-      nombre: base.nombre,
-      creditos: base.creditos,
-      nivel: base.nivel,
-      prerrequisitos: prereqs,
+    // El extra se suma a la lista y tambien a cada camino alternativo, para
+    // no perder las alternativas al aplicar la red de seguridad.
+    return base.conPrerrequisitos(
+      {...base.prerrequisitos, ...prereqsExtra}.toList(),
+      [
+        for (final camino in base.alternativas)
+          {...camino, ...prereqsExtra}.toList(),
+      ],
     );
   }
 
@@ -233,8 +298,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
 
   bool _prerrequisitosCumplidos(String codigo, int semestre) {
     final mat = _materiaUnificada(codigo);
-    if (mat == null || mat.prerrequisitos.isEmpty) return true;
-    return mat.prerrequisitos.every((p) => _prereqCumplido(p, semestre));
+    if (mat == null) return true;
+    return mat.requisitosCumplidos((p) => _prereqCumplido(p, semestre));
   }
 
   Set<String> get _aprobadas =>
@@ -242,7 +307,9 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
 
   Set<String> get _todasAprobadas {
     final set = _aprobadas;
-    for (final h in _homologacionesExternas) set.add(h.codigoMateria);
+    for (final h in _homologacionesExternas) {
+      set.add(h.codigoMateria);
+    }
     for (final n in _inglesHomologados) {
       if (n >= 1 && n <= codigosIngles.length) set.add(codigosIngles[n - 1]);
     }
@@ -315,14 +382,63 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     return total;
   }
 
-  // Maximo de creditos permitidos segun promedio
-  int get _maxCreditosSemestre => _promedio >= 4.0 ? 20 : 18;
+  // ── Topes de creditos por semestre (reglamento UTB) ───────
+  // Regla general: un estudiante con buen promedio puede matricular mas
+  // creditos que uno que va justo.
+  static const double _promedioParaCupoAmpliado = 4.0;
+  static const int _maxCreditosPromedioAlto = 20;
+  static const int _maxCreditosPromedioBajo = 18;
 
-  bool _esExcepcionCreditosCdat(int semestre) =>
-      widget.programa.codigo.toUpperCase() == 'CDAT' && semestre == 4;
+  // El semestre 1 no tiene promedio previo con que calcular el cupo, asi
+  // que usa un tope fijo. 18 alcanza para el primer semestre de las cuatro
+  // mallas (la mas cargada es IMEC con 18 cr).
+  static const int _maxCreditosPrimerSemestre = 18;
 
-  int _maxCreditosParaSemestre(int semestre) =>
-      _esExcepcionCreditosCdat(semestre) ? 21 : _maxCreditosSemestre;
+  // Rango valido de una nota en la UTB.
+  static const double _promedioMinimo = 3.0;
+  static const double _promedioMaximo = 5.0;
+
+  /// Creditos que la malla del programa principal asigna a ese nivel.
+  ///
+  /// Sirve de PISO del tope: si la propia universidad matricula 21 creditos
+  /// en un semestre, no tiene sentido marcarlo como excedido porque el
+  /// estudiante no puede quitar materias obligatorias. Antes esto estaba
+  /// parchado a mano solo para CDAT semestre 4; la regla general tambien
+  /// cubre IIND semestre 2 e IMEC semestre 3, que traen 19 creditos y con
+  /// promedio bajo quedaban marcados como excedidos sin arreglo posible.
+  int _creditosMallaDelNivel(int semestre) => widget.programa.materias
+      .where((m) => m.nivel == semestre)
+      .fold(0, (total, m) => total + m.creditos);
+
+  /// Promedio que habilito el cupo de ese semestre: el del semestre anterior.
+  /// Null en el semestre 1 (no hay previo) o si aun no se ha ingresado.
+  double? _promedioQueHabilita(int semestre) =>
+      semestre <= 1 ? null : _promediosPorSemestre[semestre - 1];
+
+  bool _promedioValido(double? p) =>
+      p != null && p >= _promedioMinimo && p <= _promedioMaximo;
+
+  /// Tope de creditos del semestre indicado.
+  int _maxCreditosParaSemestre(int semestre) {
+    final int base;
+    if (semestre <= 1) {
+      base = _maxCreditosPrimerSemestre;
+    } else {
+      final previo = _promedioQueHabilita(semestre);
+      if (!_promedioValido(previo)) {
+        // Todavia no sabemos el promedio previo. Se asume el cupo alto para
+        // no marcar el semestre en rojo antes de que el usuario lo escriba;
+        // igual no se puede generar el plan sin completarlos todos.
+        base = _maxCreditosPromedioAlto;
+      } else {
+        base = previo! >= _promedioParaCupoAmpliado
+            ? _maxCreditosPromedioAlto
+            : _maxCreditosPromedioBajo;
+      }
+    }
+    final piso = _creditosMallaDelNivel(semestre);
+    return base > piso ? base : piso;
+  }
 
   List<int> get _semestresExcedidos {
     final excedidos = <int>[];
@@ -335,6 +451,20 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   }
 
   bool get _haySemestresExcedidos => _semestresExcedidos.isNotEmpty;
+
+  /// Semestres cursados a los que todavia les falta el promedio.
+  /// Se piden TODOS: los intermedios habilitan el cupo del siguiente y el
+  /// ultimo define con cuanto cupo arranca el plan futuro.
+  List<int> get _semestresSinPromedio => [
+        for (int s = 1; s <= _semestresCursados; s++)
+          if (!_promedioValido(_promediosPorSemestre[s])) s,
+      ];
+
+  /// Promedio que se manda al backend para topear los semestres futuros:
+  /// el del ultimo semestre cursado, que es el que la UTB mira al matricular
+  /// el siguiente.
+  double get _promedioParaPlanFuturo =>
+      _promediosPorSemestre[_semestresCursados] ?? _promedioParaCupoAmpliado;
 
   List<Materia> _materiasDelNivel(int nivel) =>
       widget.programa.materias.where((m) => m.nivel == nivel).toList();
@@ -375,7 +505,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
           content: Text(
             'No puedes marcar esta materia como aprobada: faltan prerrequisitos aprobados.',
           ),
-          backgroundColor: Color(0xFFFF6B6B),
+          backgroundColor: Colores.error,
         ),
       );
       return;
@@ -407,15 +537,16 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     if (query.trim().isEmpty) return [];
     final q = _norm(query);
     return _todasLasMateriasYElectivas.where((m) {
-      if (excluirSemestre != null && _fueRegistrada(m.codigo, excluirSemestre))
+      if (excluirSemestre != null && _fueRegistrada(m.codigo, excluirSemestre)) {
         return false;
+      }
       if (excluirSemestre != null &&
           !_prerrequisitosCumplidos(m.codigo, excluirSemestre)) {
         return false;
       }
       if (aprobadas != null &&
-          m.prerrequisitos.isNotEmpty &&
-          !m.prerrequisitos.every((p) => aprobadas.contains(p))) {
+          !(_materiaUnificada(m.codigo) ?? m)
+              .requisitosCumplidos(aprobadas.contains)) {
         return false;
       }
       // No mostrar materias de la malla cuyo nivel sea <= al semestre actual.
@@ -433,14 +564,22 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   }
 
   Future<void> _irAPlanificacion() async {
+    // Sin el promedio de cada semestre no se puede validar el historial ni
+    // saber con cuanto cupo arranca el plan futuro.
+    final sinPromedio = _semestresSinPromedio;
+    if (sinPromedio.isNotEmpty) {
+      final lista = sinPromedio.join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(_aviso(sinPromedio.length == 1
+          ? 'Falta el promedio del semestre $lista.'
+          : 'Faltan los promedios de los semestres $lista.'));
+      setState(() => _semestreExpandido = sinPromedio.first);
+      return;
+    }
+
     if (_haySemestresExcedidos) {
       final semestres = _semestresExcedidos.join(', ');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Corrige los semestres $semestres: superan el limite de creditos permitido.'),
-        backgroundColor: const Color(0xFFFF6B6B),
-        duration: const Duration(seconds: 4),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(_aviso(
+          'Corrige los semestres $semestres: superan el límite de créditos permitido.'));
       return;
     }
 
@@ -459,10 +598,9 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         programaSecundario: widget.programaSecundario?.codigo,
         aprobadas: _aprobadas.toList(),
         nivelesInglesHomologados: _inglesHomologados.toList(),
-        promedio: _promedio,
+        promedio: _promedioParaPlanFuturo,
         semestresCursados: _semestresCursados,
         homologacionesExternas: homologacionesList,
-        practicaUnica: _practicaUnica,
         practicaSola: _practicaSola,
       );
 
@@ -472,8 +610,8 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         setState(() => _isGeneratingPlan = false);
         Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => PantallaPlanificacion(
+          RutaProfundidad(
+            pagina: PantallaPlanificacion(
               respuestaPlan: respuestaPlan,
               programaPrincipal: widget.programa,
               programaSecundario: widget.programaSecundario,
@@ -481,7 +619,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
               datosUsuario: widget.datosUsuario,
               datosPlan: respuesta,
               semestresCursados: _semestresCursados,
-              promedio: _promedio,
+              promedio: _promedioParaPlanFuturo,
               materiasAprobadas: _aprobadas.toList(),
               homologaciones: homologacionesList,
             ),
@@ -494,28 +632,54 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         await SesionHelper.manejarSesionExpirada(context);
       }
     } catch (e) {
+      // Las otras dos ramas ya comprobaban `mounted`; esta se habia quedado
+      // sin guarda y crasheaba si el usuario salia mientras se generaba
+      // el plan (setState y ScaffoldMessenger tras el await).
+      if (!mounted) return;
       setState(() => _isGeneratingPlan = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Error al generar el plan: ${e.toString().replaceAll('Exception: ', '')}'),
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 4),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(_aviso(
+          'Error al generar el plan: ${e.toString().replaceAll('Exception: ', '')}'));
     }
   }
+
+  /// SnackBar del sistema: flotante, con el radio de tarjeta y la tinta de
+  /// error de la paleta. Antes cada aviso repetia su propio estilo y uno
+  /// de ellos usaba Colors.red, que no pertenece a la paleta.
+  SnackBar _aviso(String mensaje) => SnackBar(
+        content: Text(mensaje,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        backgroundColor: Colores.error,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+        ),
+        // 4 s alcanzan para un aviso corto, no para "no se pudo armar el
+        // plan" con la lista de materias: ~15 caracteres por segundo, hasta 12.
+        duration: Duration(seconds: (mensaje.length / 15).ceil().clamp(4, 12)),
+      );
 
   // ── Build ─────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
+      backgroundColor: Colores.fondoApp,
       drawer: MenuLateral(token: widget.token, datosUsuario: widget.datosUsuario),
+      // El AppBar no pinta una franja propia: comparte el azul con el panel
+      // de pasos que va debajo, asi no queda costura entre los dos.
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
+        backgroundColor: Colores.primario,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Mi Historial Académico',
-            style: TextStyle(fontWeight: FontWeight.bold)),
+        scrolledUnderElevation: 0,
+        title: const Text(
+          'Mi Historial Académico',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 17,
+            letterSpacing: -0.3,
+          ),
+        ),
       ),
       body: Column(
         children: [
@@ -527,69 +691,123 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   }
 
   Widget _buildIndicador() {
-    const labels = ['Promedio', 'Inglés', 'Homologaciones', 'Historial'];
+    // El paso 'Promedio' desaparecio: ahora se pregunta dentro de cada
+    // semestre del historial, no una vez para toda la carrera.
+    const labels = ['Inglés', 'Homologaciones', 'Historial'];
     const iconos = [
-      Icons.bar_chart_rounded,
       Icons.language_rounded,
       Icons.verified_rounded,
       Icons.checklist_rounded,
     ];
     return Container(
-      color: const Color(0xFF1A1FC8),
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 22),
+      decoration: const BoxDecoration(
+        // Azul de marca solido, mismo criterio que la cabecera de seleccion.
+        color: Colores.primario,
+        // Esquinas inferiores redondeadas: deja de ser una franja pegada de
+        // lado a lado y pasa a leerse como panel apoyado sobre el contenido.
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
+        ),
+      ),
       child: Row(
-        children: List.generate(4, (i) {
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: List.generate(labels.length, (i) {
           final activo = i == _paso;
           final completado = i < _paso;
           return Expanded(
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: Column(
                     children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: completado
-                              ? const Color(0xFF4ADE00)
-                              : activo
-                                  ? Colors.white
-                                  : const Color(0xFF2D33D4),
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Icon(
-                          completado ? Icons.check_rounded : iconos[i],
-                          size: 16,
-                          color: completado
-                              ? Colors.black
-                              : activo
-                                  ? const Color(0xFF1A1FC8)
-                                  : const Color(0xFF6B7280),
+                      // El paso activo se agranda un poco. La escala es lo
+                      // unico que aguanta la curva de resorte; la decoracion
+                      // se anima aparte con la curva principal.
+                      AnimatedScale(
+                        scale: activo ? 1.08 : 1,
+                        duration: Movimiento.corta,
+                        curve: Movimiento.resorte,
+                        child: AnimatedContainer(
+                          duration: Movimiento.corta,
+                          curve: Movimiento.principal,
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: completado
+                                ? Colores.exito
+                                : activo
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.12),
+                            // Radio concentrico respecto al panel: la ficha
+                            // se curva menos que el contenedor que la rodea.
+                            borderRadius: BorderRadius.circular(
+                                Superficies.radioInterno(
+                                    Superficies.radioTarjeta, 12)),
+                            border: Border.all(
+                              color: completado || activo
+                                  ? Colors.transparent
+                                  : Colors.white.withValues(alpha: 0.18),
+                            ),
+                            boxShadow:
+                                activo ? Superficies.sutil : Superficies.ninguna,
+                          ),
+                          child: Icon(
+                            completado ? Icons.check_rounded : iconos[i],
+                            size: 17,
+                            color: completado
+                                ? Colors.black
+                                : activo
+                                    ? Colores.primario
+                                    : Colores.primarioSuave,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 3),
-                      Text(labels[i],
-                          style: TextStyle(
-                            fontSize: 9,
-                            color: activo
-                                ? Colors.white
-                                : completado
-                                    ? const Color(0xFF4ADE00)
-                                    : const Color(0xFF6B7280),
-                            fontWeight: activo ? FontWeight.bold : FontWeight.normal,
-                          )),
+                      const SizedBox(height: 8),
+                      Text(
+                        labels[i],
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          letterSpacing: 0.2,
+                          color: activo
+                              ? Colors.white
+                              : completado
+                                  ? Colores.exito
+                                  : Colores.primarioSuave
+                                      .withValues(alpha: 0.75),
+                          fontWeight:
+                              activo ? FontWeight.w700 : FontWeight.w500,
+                        ),
+                      ),
                     ],
                   ),
                 ),
-                if (i < 3)
-                  Container(
-                      width: 16,
-                      height: 1,
-                      color: i < _paso
-                          ? const Color(0xFF4ADE00)
-                          : const Color(0xFF2D33D4)),
+                // El conector solo va ENTRE pasos. Antes la condicion era
+                // `i < 3` con tres etiquetas, asi que dibujaba tambien una
+                // linea suelta despues del ultimo.
+                if (i < labels.length - 1)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 18),
+                    child: AnimatedContainer(
+                      duration: Movimiento.corta,
+                      curve: Movimiento.principal,
+                      width: 18,
+                      height: 2,
+                      decoration: BoxDecoration(
+                        color: i < _paso
+                            ? Colores.exito
+                            : Colors.white.withValues(alpha: 0.18),
+                        borderRadius:
+                            BorderRadius.circular(Superficies.radioPildora),
+                      ),
+                    ),
+                  ),
               ],
             ),
           );
@@ -612,287 +830,316 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
 
   Widget _buildPaso() {
     switch (_paso) {
-      case 0: return _buildPromedio();
-      case 1: return _buildIngles();
-      case 2: return _buildHomologExternas();
-      case 3: return _buildHistorial();
+      case 0: return _buildIngles();
+      case 1: return _buildHomologExternas();
+      case 2: return _buildHistorial();
       default: return const SizedBox();
     }
   }
 
-  // ── PASO 0: Promedio ──────────────────────────────────────
-  Widget _buildPromedio() {
-    final maxCr = _promedio >= 4.0 ? 20 : 18;
-    final ok = _promedio >= 4.0;
-    // Nota invalida: menor a 3.0 o mayor a 5.0. No permite avanzar.
-    final invalida = _promedioIngresado && (_promedio < 3.0 || _promedio > 5.0);
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('¿Cuál es tu promedio acumulado?',
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E))),
-          const SizedBox(height: 8),
-          const Text(
-              'Tu promedio determina cuántos créditos puedes tomar por semestre.',
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-          const SizedBox(height: 24),
-          TextField(
-            controller: _ctrlPromedio,
-            keyboardType: TextInputType.number,
-            // maxLength evita que 2.9999... se redondee a 3.0 por precision float
-            maxLength: 4,
-            inputFormatters: [FormatoDecimal()],
-            decoration: _inputDeco('Promedio (ej. 3.8)',
-                icon: Icons.bar_chart_rounded).copyWith(counterText: ''),
-            onChanged: (valor) {
-              setState(() {
-                _promedioIngresado = valor.trim().isNotEmpty;
-                final p = double.tryParse(valor);
-                _promedio = p != null ? double.parse(p.toStringAsFixed(2)) : 0.0;
-              });
-            },
-          ),
-          const SizedBox(height: 20),
-          if (_promedioIngresado)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: invalida
-                    ? const Color(0xFFFF6B6B).withOpacity(0.10)
-                    : ok
-                        ? const Color(0xFF4ADE00).withOpacity(0.10)
-                        : const Color(0xFFFBBF24).withOpacity(0.12),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: invalida
-                      ? const Color(0xFFFF6B6B)
-                      : ok
-                          ? const Color(0xFF4ADE00)
-                          : const Color(0xFFFBBF24),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    invalida
-                        ? Icons.cancel_rounded
-                        : ok
-                            ? Icons.check_circle_rounded
-                            : Icons.info_rounded,
-                    color: invalida
-                        ? const Color(0xFF991B1B)
-                        : ok
-                            ? const Color(0xFF166534)
-                            : const Color(0xFF92400E),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      invalida
-                          ? 'Nota invalida. El promedio debe estar entre 3.0 y 5.0. Por favor revisa de nuevo.'
-                          : ok
-                              ? 'Promedio >= 4.0 → Maximo $maxCr creditos por semestre'
-                              : 'Promedio < 4.0 → Maximo $maxCr creditos por semestre',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: invalida
-                            ? const Color(0xFF991B1B)
-                            : ok
-                                ? const Color(0xFF166534)
-                                : const Color(0xFF92400E),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 32),
-          // El boton se deshabilita si no se ha ingresado promedio o es invalido
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: (!_promedioIngresado || invalida)
-                  ? null
-                  : () => setState(() => _paso = 1),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1A1FC8),
-                disabledBackgroundColor: const Color(0xFF1A1FC8).withOpacity(0.4),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                elevation: 0,
-              ),
-              child: const Text('Siguiente',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── PASO 1: Inglés ────────────────────────────────────────
+  // ── PASO 0: Inglés ────────────────────────────────────────
   Widget _buildIngles() {
     const nombres = [
       'Lengua Extranjera I', 'Lengua Extranjera II',
       'Lengua Extranjera III', 'Lengua Extranjera IV', 'Lengua Extranjera V',
     ];
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.fromLTRB(20, 30, 20, 34),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Niveles de inglés homologados',
+          const Revelar(child: Cejilla('Paso 1 de 3 · Inglés')),
+          const SizedBox(height: 16),
+          const Revelar(
+            indice: 1,
+            child: Text(
+              'Niveles de inglés homologados',
               style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A1A2E))),
-          const SizedBox(height: 8),
-          const Text(
+                fontSize: 27,
+                fontWeight: FontWeight.w800,
+                // Tracking negativo: en titulares grandes el espaciado por
+                // defecto se ve suelto y abarata el conjunto.
+                letterSpacing: -1,
+                height: 1.1,
+                color: Colores.textoTitulo,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Revelar(
+            indice: 2,
+            child: Text(
               'Marca los niveles que ya tienes homologados por examen. '
               'Estos no aparecerán en tu historial ni en el plan futuro.',
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-          const SizedBox(height: 20),
+              style: TextStyle(
+                  fontSize: 14, height: 1.45, color: Colores.textoSecundario),
+            ),
+          ),
+          const SizedBox(height: 28),
           ...List.generate(5, (i) {
             final nivel = i + 1;
             final marcado = _inglesHomologados.contains(nivel);
-            return GestureDetector(
-              onTap: () => setState(() {
-                if (marcado) {
-                  for (int n = nivel; n <= 5; n++) _inglesHomologados.remove(n);
-                } else {
-                  for (int n = 1; n <= nivel; n++) _inglesHomologados.add(n);
-                }
-                // Ingles homologado afecta las aprobadas externas
-                _recalcularAprobadas();
-              }),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: marcado
-                      ? const Color(0xFF1A1FC8).withOpacity(0.08)
-                      : Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: marcado ? const Color(0xFF1A1FC8) : const Color(0xFFE5E7EB),
-                    width: marcado ? 1.5 : 1,
-                  ),
-                ),
+            return Revelar(
+              indice: i + 3,
+              child: _filaIngles(nivel, nombres[i], marcado),
+            );
+          }),
+          if (_inglesHomologados.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Revelar(
+              indice: 8,
+              child: TarjetaBisel(
+                padding: const EdgeInsets.all(14),
+                acento: Colores.primario,
+                sombra: Superficies.sutil,
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 32, height: 32,
-                      decoration: BoxDecoration(
-                        color: marcado
-                            ? const Color(0xFF1A1FC8)
-                            : const Color(0xFFF3F4F6),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Center(
-                        child: Text('$nivel',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: marcado ? Colors.white : const Color(0xFF6B7280))),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
+                    const Icon(Icons.auto_awesome_rounded,
+                        size: 18, color: Colores.primario),
+                    const SizedBox(width: 10),
                     Expanded(
-                      child: Text(nombres[i],
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: marcado ? FontWeight.w600 : FontWeight.normal,
-                            color: marcado
-                                ? const Color(0xFF1A1FC8)
-                                : const Color(0xFF374151),
-                          )),
+                      child: Text(
+                        '${_inglesHomologados.length} nivel(es) homologado(s). '
+                        'En tu historial aparecerán marcados automáticamente '
+                        'y no tendrás que registrarlos.',
+                        style: const TextStyle(
+                            fontSize: 12.5,
+                            height: 1.4,
+                            color: Colores.primario,
+                            fontWeight: FontWeight.w500),
+                      ),
                     ),
-                    if (marcado)
-                      const Icon(Icons.check_circle_rounded,
-                          color: Color(0xFF1A1FC8), size: 20),
                   ],
                 ),
               ),
-            );
-          }),
-          if (_inglesHomologados.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1FC8).withOpacity(0.06),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '${_inglesHomologados.length} nivel(es) homologado(s). '
-                'En tu historial aparecerán marcados automáticamente '
-                'y no tendrás que registrarlos.',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF1A1FC8)),
+            ),
+          ],
+          const SizedBox(height: 34),
+          Row(children: [
+            // Ingles es ahora el PRIMER paso (antes lo era Promedio), asi que
+            // el boton de atras sale de la pantalla en vez de retroceder.
+            _btnSecundario(() => Navigator.pop(context)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: BotonIsla(
+                texto: 'Siguiente',
+                onTap: () => setState(() => _paso = 1),
               ),
             ),
-          const SizedBox(height: 24),
-          Row(children: [
-            _btnSecundario(() => setState(() => _paso = 0)),
-            const SizedBox(width: 12),
-            Expanded(child: _btnPrimario('Siguiente', () => setState(() => _paso = 2))),
           ]),
         ],
       ),
     );
   }
 
-  // ── PASO 2: Homologaciones externas ──────────────────────
+  /// Fila seleccionable de un nivel de ingles, con el mismo bisel doble que
+  /// las tarjetas de programa: marco tenue afuera, nucleo blanco adentro y
+  /// radios concentricos entre los dos.
+  Widget _filaIngles(int nivel, String nombre, bool marcado) {
+    return Presionable(
+      onTap: () => setState(() {
+        if (marcado) {
+          for (int n = nivel; n <= 5; n++) {
+            _inglesHomologados.remove(n);
+          }
+        } else {
+          for (int n = 1; n <= nivel; n++) {
+            _inglesHomologados.add(n);
+          }
+        }
+        // Ingles homologado afecta las aprobadas externas
+        _recalcularAprobadas();
+      }),
+      child: AnimatedContainer(
+        duration: Movimiento.corta,
+        curve: Movimiento.principal,
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: marcado
+              ? Colores.primario.withValues(alpha: 0.12)
+              : Superficies.brumaLavanda,
+          borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
+          border: Border.all(
+            color: marcado
+                ? Colores.primario.withValues(alpha: 0.45)
+                : Superficies.nieblaAzul.withValues(alpha: 0.6),
+          ),
+          boxShadow: marcado ? Superficies.sutil : Superficies.ambiente,
+        ),
+        child: AnimatedContainer(
+          duration: Movimiento.corta,
+          curve: Movimiento.principal,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(
+                Superficies.radioInterno(Superficies.radioTarjeta, 5)),
+          ),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: Movimiento.corta,
+                curve: Movimiento.principal,
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: marcado
+                      ? Colores.primario
+                      : Colores.primario.withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(
+                      Superficies.radioInterno(Superficies.radioTarjeta, 12)),
+                  border: Border.all(
+                    color: Colores.primario
+                        .withValues(alpha: marcado ? 0.45 : 0.14),
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    '$nivel',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      letterSpacing: -0.3,
+                      color: marcado ? Colors.white : Colores.primario,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  nombre,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    letterSpacing: -0.2,
+                    fontWeight: marcado ? FontWeight.w700 : FontWeight.w500,
+                    color: marcado ? Colores.primario : Colores.textoOscuro,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Circulo de estado: se enciende, no aparece de la nada.
+              AnimatedContainer(
+                duration: Movimiento.corta,
+                curve: Movimiento.principal,
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: marcado
+                      ? Colores.primario
+                      : Superficies.nieblaAzul.withValues(alpha: 0.5),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.check_rounded,
+                  size: 16,
+                  color: marcado
+                      ? Colors.white
+                      : Colores.textoTenue.withValues(alpha: 0.55),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── PASO 1: Homologaciones externas ──────────────────────
   Widget _buildHomologExternas() {
     final resultados = _buscarMaterias(_busqHomolog);
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+          padding: const EdgeInsets.fromLTRB(20, 30, 20, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Homologaciones externas',
+              const Revelar(
+                  child: Cejilla('Paso 2 de 3 · Homologaciones',
+                      color: Colores.acentoMorado)),
+              const SizedBox(height: 16),
+              const Revelar(
+                indice: 1,
+                child: Text(
+                  'Homologaciones externas',
                   style: TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A1A2E))),
-              const SizedBox(height: 8),
-              const Text(
+                    fontSize: 27,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1,
+                    height: 1.1,
+                    color: Colores.textoTitulo,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Revelar(
+                indice: 2,
+                child: Text(
                   'Busca materias homologadas mediante Talento Tech, '
                   'acuerdos con directores u otros programas. '
                   'Si no tienes, pasa al siguiente paso.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-              const SizedBox(height: 14),
-              if (_homologacionesExternas.isNotEmpty) ...[
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: _homologacionesExternas.map((h) {
-                    final mat = _todasLasMateriasYElectivas.firstWhere(
-                        (m) => m.codigo == h.codigoMateria,
-                        orElse: () => Materia(
-                            codigo: h.codigoMateria,
-                            nombre: h.codigoMateria,
-                            creditos: 0,
-                            nivel: 0));
-                    return Chip(
-                      label: Text('${mat.nombre} · ${h.nombrePrograma}',
-                          style: const TextStyle(
-                              fontSize: 11, color: Color(0xFF7C3AED))),
-                      backgroundColor: const Color(0xFF7C3AED).withOpacity(0.10),
-                      side: const BorderSide(color: Color(0xFF7C3AED), width: 0.8),
-                      deleteIcon: const Icon(Icons.close,
-                          size: 14, color: Color(0xFF7C3AED)),
-                      onDeleted: () => setState(() => _homologacionesExternas
-                          .removeWhere((x) => x.codigoMateria == h.codigoMateria)),
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    );
-                  }).toList(),
+                  style: TextStyle(
+                      fontSize: 14,
+                      height: 1.45,
+                      color: Colores.textoSecundario),
                 ),
-                const SizedBox(height: 12),
+              ),
+              const SizedBox(height: 22),
+              if (_homologacionesExternas.isNotEmpty) ...[
+                TarjetaBisel(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  acento: Colores.acentoMorado,
+                  sombra: Superficies.sutil,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Cejilla('Ya homologadas',
+                          color: Colores.acentoMorado),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _homologacionesExternas.map((h) {
+                          final mat = _todasLasMateriasYElectivas.firstWhere(
+                              (m) => m.codigo == h.codigoMateria,
+                              orElse: () => Materia(
+                                  codigo: h.codigoMateria,
+                                  nombre: h.codigoMateria,
+                                  creditos: 0,
+                                  nivel: 0));
+                          return Chip(
+                            label: Text('${mat.nombre} · ${h.nombrePrograma}',
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colores.acentoMorado)),
+                            backgroundColor:
+                                Colores.acentoMorado.withValues(alpha: 0.10),
+                            side: BorderSide(
+                                color: Colores.acentoMorado
+                                    .withValues(alpha: 0.35)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                  Superficies.radioPildora),
+                            ),
+                            deleteIcon: const Icon(Icons.close_rounded,
+                                size: 14, color: Colores.acentoMorado),
+                            onDeleted: () => setState(() =>
+                                _homologacionesExternas.removeWhere(
+                                    (x) => x.codigoMateria == h.codigoMateria)),
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
               ],
               TextField(
                 controller: _ctrlHomolog,
@@ -904,278 +1151,416 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
             ],
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 14),
         Expanded(
           child: _busqHomolog.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Icon(Icons.verified_outlined, size: 48, color: Color(0xFFD1D5DB)),
-                      SizedBox(height: 8),
-                      Text('Escribe para buscar materias',
-                          style: TextStyle(color: Color(0xFF9CA3AF))),
-                    ],
-                  ),
-                )
+              ? _vacio(Icons.verified_outlined, 'Escribe para buscar materias',
+                  'Las materias homologadas quedan marcadas en todo tu historial.')
               : resultados.isEmpty
-                  ? const Center(
-                      child: Text('No se encontraron materias',
-                          style: TextStyle(color: Color(0xFF9CA3AF))))
+                  ? _vacio(Icons.search_off_rounded,
+                      'No se encontraron materias', 'Prueba con otro nombre.')
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding:
+                          const EdgeInsets.fromLTRB(20, 4, 20, 8),
                       itemCount: resultados.length > 6 ? 6 : resultados.length,
                       itemBuilder: (_, i) {
                         final m = resultados[i];
                         final yaHom = _estaHomologadaExterna(m.codigo);
-                        return _CardHomologacion(
-                          materia: m,
-                          yaAgregada: yaHom,
-                          onAgregar: (prog) {
-                            setState(() {
-                              _homologacionesExternas
-                                  .removeWhere((h) => h.codigoMateria == m.codigo);
-                              _homologacionesExternas.add(HomologacionExterna(
-                                codigoMateria: m.codigo,
-                                nombrePrograma: prog,
-                              ));
-                              _busqHomolog = '';
-                              _ctrlHomolog.clear();
-                              // Homologaciones externas afectan las aprobadas
+                        return Revelar(
+                          indice: i,
+                          child: CardHomologacion(
+                            materia: m,
+                            yaAgregada: yaHom,
+                            onAgregar: (prog) {
+                              setState(() {
+                                _homologacionesExternas.removeWhere(
+                                    (h) => h.codigoMateria == m.codigo);
+                                _homologacionesExternas.add(HomologacionExterna(
+                                  codigoMateria: m.codigo,
+                                  nombrePrograma: prog,
+                                ));
+                                _busqHomolog = '';
+                                _ctrlHomolog.clear();
+                                // Homologaciones externas afectan las aprobadas
+                                _recalcularAprobadas();
+                              });
+                            },
+                            onQuitar: () => setState(() {
+                              _homologacionesExternas.removeWhere(
+                                  (h) => h.codigoMateria == m.codigo);
                               _recalcularAprobadas();
-                            });
-                          },
-                          onQuitar: () => setState(() {
-                            _homologacionesExternas
-                                .removeWhere((h) => h.codigoMateria == m.codigo);
-                            _recalcularAprobadas();
-                          }),
+                            }),
+                          ),
                         );
                       },
                     ),
         ),
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
           child: Row(children: [
-            _btnSecundario(() => setState(() => _paso = 1)),
+            _btnSecundario(() => setState(() => _paso = 0)),
             const SizedBox(width: 12),
             Expanded(
-                child: _btnPrimario('Ir al historial', () => setState(() => _paso = 3))),
+              child: BotonIsla(
+                texto: 'Ir al historial',
+                onTap: () => setState(() => _paso = 2),
+              ),
+            ),
           ]),
         ),
       ],
     );
   }
 
-  // ── PASO 3: Historial ─────────────────────────────────────
+  /// Estado vacio con la misma respiracion que el resto: icono en su propia
+  /// ficha, titular y una linea de contexto. Antes era un icono gris suelto.
+  Widget _vacio(IconData icono, String titulo, String detalle) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: Superficies.brumaLavanda,
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Superficies.nieblaAzul.withValues(alpha: 0.8)),
+              ),
+              child: Icon(icono,
+                  size: 30, color: Colores.primario.withValues(alpha: 0.55)),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              titulo,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
+                color: Colores.textoOscuro,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              detalle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 12.5, height: 1.4, color: Colores.textoTenue),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── PASO 2: Historial ─────────────────────────────────────
   Widget _buildHistorial() {
     final semestresExcedidos = _semestresExcedidos;
     final hayExcedidos = semestresExcedidos.isNotEmpty;
 
     return Column(
       children: [
-        Container(
-          color: const Color(0xFF1A1FC8),
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-          child: Column(
-            children: [
-              Row(children: [
-                _stat('Aprobadas', '${_todasAprobadas.length}'),
-                _divV(),
-                _stat('Créditos', '$_creditosAprobados'),
-                _divV(),
-                _stat('Avance', '${(_avance * 100).toStringAsFixed(0)}%'),
-                _divV(),
-                _stat('Semestres', '$_semestresCursados cursados'),
-              ]),
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: LinearProgressIndicator(
-                  value: _avance,
-                  minHeight: 8,
-                  backgroundColor: const Color(0xFF2D33D4),
-                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF4ADE00)),
-                ),
-              ),
-              if (hayExcedidos) ...[
-                const SizedBox(height: 10),
-                Container(
-                  width: double.infinity,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFF6B6B).withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFFF6B6B)),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(Icons.warning_rounded,
-                          color: Color(0xFFFFD1D1), size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Semestres ${semestresExcedidos.join(', ')} superan el limite de creditos permitido. Quita materias para generar el plan.',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        Container(
-          color: const Color(0xFFEEF0FF),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: const Text(
-            'Registra qué materias cursaste en cada semestre. '
-            'Los ingleses homologados y las homologaciones externas '
-            'ya aparecen marcados automáticamente.',
-            style: TextStyle(fontSize: 11, color: Color(0xFF374151)),
-          ),
-        ),
+        _panelEstadisticas(semestresExcedidos, hayExcedidos),
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: _semestresCursados,
-            itemBuilder: (_, i) => _buildSemestre(i + 1),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+            // Nota de contexto + un item por semestre + pie con los
+            // controles. Se mantiene el builder para no construir de golpe
+            // los diez semestres de la malla.
+            itemCount: _semestresCursados + 2,
+            itemBuilder: (_, i) {
+              if (i == 0) return _notaHistorial();
+              if (i <= _semestresCursados) {
+                return Revelar(indice: i - 1, child: _buildSemestre(i));
+              }
+              return _pieHistorial();
+            },
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Row(
-            children: [
-              if (_semestresCursados > 1)
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: SizedBox(
-                    height: 48,
-                    width: 48,
-                    child: OutlinedButton(
-                      onPressed: () => setState(() => _semestresCursados--),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFFFF6B6B),
-                        side: const BorderSide(color: Color(0xFFFF6B6B)),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        padding: EdgeInsets.zero,
-                      ),
-                      child: const Icon(Icons.remove_rounded, size: 20),
-                    ),
-                  ),
-                ),
-              Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: OutlinedButton.icon(
-                    onPressed: _semestresCursados < _maxSemestresCursados
-                        ? () {
-                            setState(() => _semestresCursados++);
-                            WidgetsBinding.instance.addPostFrameCallback((_) =>
-                                setState(() => _semestreExpandido = _semestresCursados));
-                          }
-                        : null,
-                    icon: const Icon(Icons.add_rounded, size: 20),
-                    label: Text(
-                      _semestresCursados < _maxSemestresCursados
-                          ? 'Agregar semestre ${_semestresCursados + 1}'
-                          : 'Máximo $_maxSemestresCursados semestres',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF1A1FC8),
-                      side: const BorderSide(color: Color(0xFF1A1FC8), width: 1.5),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      backgroundColor: const Color(0xFF1A1FC8).withOpacity(0.05),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: SwitchListTile(
-            title: const Text('Práctica profesional única',
-                style: TextStyle(fontWeight: FontWeight.w500)),
-            subtitle: const Text(
-              'Una sola práctica que sirve para ambos programas',
-              style: TextStyle(fontSize: 12)
-            ),
-            value: _practicaUnica,
-            onChanged: (value) => setState(() => _practicaUnica = value),
-            activeColor: const Color(0xFF1A1FC8),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-          child: SwitchListTile(
-            title: const Text('Semestre dedicado solo a Prácticas',
-                style: TextStyle(fontWeight: FontWeight.w500)),
-            subtitle: const Text(
-              'El último semestre estará dedicado únicamente a Prácticas Profesionales, '
-              'sin otras materias.',
-              style: TextStyle(fontSize: 12),
-            ),
-            value: _practicaSola,
-            onChanged: (value) => setState(() => _practicaSola = value),
-            activeColor: const Color(0xFF1A1FC8),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Row(
-            children: [
-              _btnSecundario(() => setState(() => _paso = 2)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: 52,
-                  child: ElevatedButton.icon(
-                    onPressed: (_isGeneratingPlan || hayExcedidos)
-                        ? null
-                        : _irAPlanificacion,
-                    icon: _isGeneratingPlan
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.black))
-                        : const Icon(Icons.auto_awesome_rounded, color: Colors.black),
-                    label: Text(
-                      _isGeneratingPlan
-                          ? 'Generando plan...'
-                          : hayExcedidos
-                              ? 'Corrige creditos excedidos'
-                              : 'Generar mi plan',
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4ADE00),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+        _barraGenerarPlan(hayExcedidos),
       ],
+    );
+  }
+
+  /// Resumen de avance. Va como tarjeta apoyada sobre el fondo y no como
+  /// franja azul de lado a lado: mismo azul de marca que la cabecera, pero
+  /// con las cuatro esquinas curvadas y sombra tintada.
+  Widget _panelEstadisticas(List<int> excedidos, bool hayExcedidos) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        decoration: BoxDecoration(
+          color: Colores.primario,
+          borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
+          boxShadow: Superficies.elevada,
+        ),
+        child: Column(
+          children: [
+            Row(children: [
+              _stat('Aprobadas', _todasAprobadas.length),
+              _divV(),
+              _stat('Créditos', _creditosAprobados),
+              _divV(),
+              _stat('Avance', (_avance * 100).round(), sufijo: '%'),
+              _divV(),
+              // Antes decia 'Semestres' con el valor '3 cursados', que a
+              // 14px ya se desbordaba. La palabra se movio a la etiqueta.
+              _stat('Cursados', _semestresCursados),
+            ]),
+            const SizedBox(height: 14),
+            // La barra usa la MISMA duracion y curva que las cifras, para
+            // que el relleno y el conteo de 'Avance' lleguen juntos al
+            // final. Con duraciones distintas se nota el desfase.
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: _avance),
+              duration: _duracionContador,
+              curve: Movimiento.principal,
+              builder: (context, valor, child) => ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(Superficies.radioPildora),
+                child: LinearProgressIndicator(
+                  value: valor,
+                  minHeight: 9,
+                  backgroundColor: Colors.white.withValues(alpha: 0.14),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(Colores.exito),
+                ),
+              ),
+            ),
+            if (hayExcedidos) ...[
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                decoration: BoxDecoration(
+                  color: Colores.error.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(
+                      Superficies.radioInterno(Superficies.radioTarjeta, 8)),
+                  border:
+                      Border.all(color: Colores.error.withValues(alpha: 0.7)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.warning_rounded,
+                        color: Colores.errorSuave, size: 18),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Semestres ${excedidos.join(', ')} superan el límite de créditos permitido. Quita materias para generar el plan.',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Nota de contexto del paso. Antes era otra franja de borde a borde;
+  /// ahora es un bloque con la misma inserccion lateral que las tarjetas.
+  Widget _notaHistorial() => Container(
+        margin: const EdgeInsets.only(bottom: 20),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colores.fondoPrimarioSuave,
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          border:
+              Border.all(color: Superficies.nieblaAzul.withValues(alpha: 0.8)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline_rounded,
+                size: 16, color: Colores.primario),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Registra qué materias cursaste en cada semestre. '
+                'Los ingleses homologados y las homologaciones externas '
+                'ya aparecen marcados automáticamente.',
+                style: TextStyle(
+                    fontSize: 12, height: 1.4, color: Colores.textoOscuro),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  /// Pie de la lista: agregar/quitar semestre y la opcion de practica sola.
+  /// Viven dentro del scroll para que la lista de semestres se quede con
+  /// todo el alto util de la pantalla.
+  Widget _pieHistorial() {
+    final puedeAgregar = _semestresCursados < _maxSemestresCursados;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              if (_semestresCursados > 1) ...[
+                Presionable(
+                  onTap: () => setState(() => _semestresCursados--),
+                  child: Container(
+                    height: 52,
+                    width: 52,
+                    decoration: BoxDecoration(
+                      color: Colores.error.withValues(alpha: 0.08),
+                      borderRadius:
+                          BorderRadius.circular(Superficies.radioInterior),
+                      border: Border.all(
+                          color: Colores.error.withValues(alpha: 0.35)),
+                    ),
+                    child: const Icon(Icons.remove_rounded,
+                        size: 20, color: Colores.error),
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: Presionable(
+                  onTap: puedeAgregar
+                      ? () {
+                          setState(() => _semestresCursados++);
+                          WidgetsBinding.instance.addPostFrameCallback((_) =>
+                              setState(() =>
+                                  _semestreExpandido = _semestresCursados));
+                        }
+                      : null,
+                  child: AnimatedContainer(
+                    duration: Movimiento.corta,
+                    curve: Movimiento.principal,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: puedeAgregar
+                          ? Colores.primario.withValues(alpha: 0.07)
+                          : Colores.fondoNeutro,
+                      borderRadius:
+                          BorderRadius.circular(Superficies.radioInterior),
+                      border: Border.all(
+                        color: puedeAgregar
+                            ? Colores.primario.withValues(alpha: 0.35)
+                            : Superficies.nieblaAzul,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          puedeAgregar
+                              ? Icons.add_rounded
+                              : Icons.check_rounded,
+                          size: 19,
+                          color: puedeAgregar
+                              ? Colores.primario
+                              : Colores.textoTenue,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            puedeAgregar
+                                ? 'Agregar semestre ${_semestresCursados + 1}'
+                                : 'Máximo $_maxSemestresCursados semestres',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.2,
+                              color: puedeAgregar
+                                  ? Colores.primario
+                                  : Colores.textoTenue,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          TarjetaBisel(
+            padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
+            acento: _practicaSola ? Colores.acentoNaranja : null,
+            sombra: Superficies.ambiente,
+            child: SwitchListTile(
+              title: const Text(
+                'Semestre dedicado solo a Prácticas',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    letterSpacing: -0.2,
+                    color: Colores.textoTitulo),
+              ),
+              subtitle: const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  'El último semestre estará dedicado únicamente a Prácticas '
+                  'Profesionales, sin otras materias.',
+                  style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: Colores.textoSecundario),
+                ),
+              ),
+              value: _practicaSola,
+              onChanged: (value) => setState(() => _practicaSola = value),
+              activeThumbColor: Colores.primario,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Barra fija con el CTA del wizard.
+  Widget _barraGenerarPlan(bool hayExcedidos) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+      child: Row(
+        children: [
+          _btnSecundario(() => setState(() => _paso = 1)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: BotonIsla(
+              texto: _isGeneratingPlan
+                  ? 'Generando plan...'
+                  : hayExcedidos
+                      ? 'Corrige créditos excedidos'
+                      : 'Generar mi plan',
+              icono: hayExcedidos
+                  ? Icons.warning_rounded
+                  : Icons.auto_awesome_rounded,
+              color: hayExcedidos ? Colores.error : Colores.exito,
+              // Negro sobre el verde de exito: es el par con contraste
+              // suficiente, el blanco sobre ese verde no lo tiene.
+              colorTexto: hayExcedidos ? Colors.white : Colors.black,
+              cargando: _isGeneratingPlan,
+              onTap: (_isGeneratingPlan || hayExcedidos)
+                  ? null
+                  : _irAPlanificacion,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1185,6 +1570,7 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
     final creditosSemestre = _creditosSemestre(semestre);
     final creditosMax = _maxCreditosParaSemestre(semestre);
     final excedeCreditos = creditosSemestre > creditosMax;
+    final faltaPromedio = !_promedioValido(_promediosPorSemestre[semestre]);
 
     // Aprobadas ANTES de este semestre — no incluye lo registrado en el mismo semestre.
     // Se usa para filtrar prereqs al inicio del semestre, no durante el redibujado.
@@ -1270,171 +1656,489 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
       }
     }
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: excedeCreditos
-              ? const Color(0xFFFF6B6B)
-              : aprobCount > 0
-                  ? const Color(0xFF4ADE00)
-                  : const Color(0xFFE5E7EB),
-          width: excedeCreditos || aprobCount > 0 ? 1.5 : 1,
-        ),
-      ),
-      child: Column(
-        children: [
-          InkWell(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-            onTap: () => setState(
-                () => _semestreExpandido = expandido ? null : semestre),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-              child: Row(
-                children: [
-                  Container(
-                    width: 34, height: 34,
-                    decoration: BoxDecoration(
-                      color: aprobCount > 0
-                          ? const Color(0xFF4ADE00)
-                          : const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    child: Center(
-                      child: Text('$semestre',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                              color: aprobCount > 0
-                                  ? Colors.black
-                                  : const Color(0xFF6B7280))),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+    // Tinte del marco. Misma prioridad que tenia el borde anterior
+    // (excedido > con aprobadas > neutro), solo que ahora tambien tinta el
+    // relleno del marco exterior.
+    final Color acento = excedeCreditos
+        ? Colores.error
+        : aprobCount > 0
+            ? Colores.exito
+            : Superficies.nieblaAzul;
+    final bool destacado = excedeCreditos || aprobCount > 0;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: AnimatedScale(
+        // El resorte solo toca la escala. En una decoracion extrapolaria el
+        // blur a negativo y Flutter lanza el assert (ver movimiento.dart).
+        scale: _semestrePresionado == semestre ? 0.985 : 1,
+        duration: Movimiento.instante,
+        curve: Movimiento.resorte,
+        child: AnimatedContainer(
+          duration: Movimiento.corta,
+          curve: Movimiento.principal,
+          // Marco exterior del bisel doble.
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: destacado
+                ? acento.withValues(alpha: 0.10)
+                : Superficies.brumaLavanda,
+            borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
+            border: Border.all(
+              color: destacado
+                  ? acento.withValues(alpha: 0.45)
+                  : Superficies.nieblaAzul.withValues(alpha: 0.6),
+            ),
+            // Abierta, la tarjeta se despega del fondo; cerrada vuelve a la
+            // sombra ambiental. Se interpola con la curva principal, que se
+            // queda dentro de [0, 1].
+            boxShadow: expandido ? Superficies.elevada : Superficies.ambiente,
+          ),
+          child: AnimatedContainer(
+            duration: Movimiento.corta,
+            curve: Movimiento.principal,
+            // Las filas de materia llegan de borde a borde, asi que el
+            // nucleo recorta para que no pisen la curva.
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              // Radio concentrico: el exterior menos el grosor del marco.
+              borderRadius: BorderRadius.circular(
+                  Superficies.radioInterno(Superficies.radioTarjeta, 6)),
+            ),
+            child: Column(
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (_) =>
+                      setState(() => _semestrePresionado = semestre),
+                  onTapUp: (_) => setState(() => _semestrePresionado = null),
+                  onTapCancel: () =>
+                      setState(() => _semestrePresionado = null),
+                  onTap: () => setState(
+                      () => _semestreExpandido = expandido ? null : semestre),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 13, 12, 13),
+                    child: Row(
                       children: [
-                        Row(children: [
-                          Text('Semestre $semestre',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                  color: Color(0xFF1A1A2E))),
-                          if (esPrimero) ...[
-                            const SizedBox(width: 6),
-                            _pill('Auto', const Color(0xFF1A1FC8)),
-                          ],
-                          if (excedeCreditos) ...[
-                            const SizedBox(width: 6),
-                            _pill('Excede', const Color(0xFFFF6B6B)),
-                          ],
-                        ]),
-                        Text(
-                          totalReg == 0
-                              ? 'Sin materias registradas'
-                              : excedeCreditos
-                                  ? '$aprobCount aprobadas · $totalReg cursadas · $creditosSemestre/$creditosMax cr'
-                                  : '$aprobCount aprobadas · $totalReg cursadas · $creditosSemestre cr',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: excedeCreditos
-                                  ? const Color(0xFFFF6B6B)
-                                  : const Color(0xFF6B7280),
-                              fontWeight: excedeCreditos
-                                  ? FontWeight.w700
-                                  : FontWeight.normal),
+                        // Ficha del numero: el mismo bisel de la tarjeta,
+                        // a menor escala.
+                        AnimatedContainer(
+                          duration: Movimiento.corta,
+                          curve: Movimiento.principal,
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: aprobCount > 0
+                                ? Colores.exito
+                                : Superficies.brumaLavanda,
+                            borderRadius: BorderRadius.circular(
+                                Superficies.radioInterno(
+                                    Superficies.radioTarjeta, 12)),
+                            border: Border.all(
+                              color: aprobCount > 0
+                                  ? Colores.exito
+                                  : Superficies.nieblaAzul,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text('$semestre',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 15,
+                                    letterSpacing: -0.3,
+                                    color: aprobCount > 0
+                                        ? Colors.black
+                                        : Colores.textoSecundario)),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Wrap y no Row: con tres etiquetas el
+                              // encabezado se desbordaba en pantallas
+                              // angostas.
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 5,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Text('Semestre $semestre',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                          letterSpacing: -0.3,
+                                          color: Colores.textoTitulo)),
+                                  if (esPrimero)
+                                    _pill('Auto', Colores.primario),
+                                  if (excedeCreditos)
+                                    _pill('Excede', Colores.error),
+                                  if (faltaPromedio)
+                                    _pill('Falta promedio',
+                                        Colores.advertencia,
+                                        colorTexto: Colores.advertenciaOscura),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                totalReg == 0
+                                    ? 'Sin materias registradas'
+                                    : excedeCreditos
+                                        ? '$aprobCount aprobadas · $totalReg cursadas · $creditosSemestre/$creditosMax cr'
+                                        : '$aprobCount aprobadas · $totalReg cursadas · $creditosSemestre cr',
+                                style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: excedeCreditos
+                                        ? Colores.error
+                                        : Colores.textoSecundario,
+                                    fontWeight: excedeCreditos
+                                        ? FontWeight.w700
+                                        : FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        // El chevron gira en vez de cambiar de icono: el
+                        // movimiento explica que es la misma pieza.
+                        AnimatedRotation(
+                          turns: expandido ? 0.5 : 0,
+                          duration: Movimiento.corta,
+                          curve: Movimiento.principal,
+                          child: Container(
+                            width: 30,
+                            height: 30,
+                            decoration: BoxDecoration(
+                              color: Superficies.brumaLavanda,
+                              shape: BoxShape.circle,
+                              border:
+                                  Border.all(color: Superficies.nieblaAzul),
+                            ),
+                            child: const Icon(Icons.expand_more_rounded,
+                                size: 18, color: Colores.primario),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  Icon(
-                    expandido
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    color: const Color(0xFF9CA3AF),
-                    size: 20,
-                  ),
-                ],
-              ),
+                ),
+                // El cuerpo crece y se encoge en vez de aparecer de golpe.
+                AnimatedSize(
+                  duration: Movimiento.corta,
+                  curve: Movimiento.principal,
+                  alignment: Alignment.topCenter,
+                  child: !expandido
+                      ? const SizedBox(width: double.infinity)
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Container(
+                              height: 1,
+                              color: Superficies.nieblaAzul
+                                  .withValues(alpha: 0.7),
+                            ),
+                            _buildPromedioSemestre(semestre),
+                            if (materiasDelNivel.isNotEmpty)
+                              _seccion('Materias de la malla'),
+                            ...materiasDelNivel.map((m) {
+                              final reg = _registros.firstWhere(
+                                  (r) =>
+                                      r.codigo == m.codigo &&
+                                      r.semestre == semestre,
+                                  orElse: () => RegistroMateria(
+                                      codigo: '',
+                                      semestre: 0,
+                                      aprobada: false));
+                              final tieneReg = reg.codigo.isNotEmpty;
+                              final aprobadaAntes = semestre > 1 &&
+                                  _registros.any((r) =>
+                                      r.codigo == m.codigo &&
+                                      r.semestre < semestre &&
+                                      r.aprobada);
+                              final homologadaExt =
+                                  _estaHomologadaExterna(m.codigo);
+
+                              return FilaMateria(
+                                nombre: m.nombre,
+                                estado: homologadaExt
+                                    ? EstadoMateria.homologada
+                                    : aprobadaAntes
+                                        ? EstadoMateria.aprobadaAntes
+                                        : !tieneReg
+                                            ? EstadoMateria.sinRegistrar
+                                            : reg.aprobada
+                                                ? EstadoMateria.aprobada
+                                                : EstadoMateria.perdida,
+                                bloqueada: esPrimero ||
+                                    aprobadaAntes ||
+                                    homologadaExt,
+                                etiquetaExtra: homologadaExt
+                                    ? _homologacionesExternas
+                                        .firstWhere(
+                                            (h) => h.codigoMateria == m.codigo)
+                                        .nombrePrograma
+                                    : null,
+                                onAprobada: (esPrimero ||
+                                        aprobadaAntes ||
+                                        homologadaExt)
+                                    ? null
+                                    : () =>
+                                        _registrar(m.codigo, semestre, true),
+                                onPerdida: (esPrimero ||
+                                        aprobadaAntes ||
+                                        homologadaExt)
+                                    ? null
+                                    : () =>
+                                        _registrar(m.codigo, semestre, false),
+                                onQuitar: (esPrimero ||
+                                        aprobadaAntes ||
+                                        homologadaExt ||
+                                        !tieneReg)
+                                    ? null
+                                    : () =>
+                                        _quitarRegistro(m.codigo, semestre),
+                              );
+                            }),
+                            () {
+                              final adicionales = _registrosDeSemestre(semestre)
+                                  .where((r) => !materiasDelNivel
+                                      .any((m) => m.codigo == r.codigo))
+                                  .toList();
+                              if (adicionales.isEmpty) {
+                                return const SizedBox.shrink();
+                              }
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _seccion('Materias adicionales'),
+                                  ...adicionales.map((r) {
+                                    final mat = _todasLasMateriasYElectivas
+                                        .firstWhere(
+                                            (m) => m.codigo == r.codigo,
+                                            orElse: () => Materia(
+                                                codigo: r.codigo,
+                                                nombre: r.codigo,
+                                                creditos: 0,
+                                                nivel: 0));
+                                    return FilaMateria(
+                                      nombre: mat.nombre,
+                                      estado: r.aprobada
+                                          ? EstadoMateria.aprobada
+                                          : EstadoMateria.perdida,
+                                      bloqueada: false,
+                                      onAprobada: () => _registrar(
+                                          mat.codigo, semestre, true),
+                                      onPerdida: () => _registrar(
+                                          mat.codigo, semestre, false),
+                                      onQuitar: () => _quitarRegistro(
+                                          mat.codigo, semestre),
+                                    );
+                                  }),
+                                ],
+                              );
+                            }(),
+                            _buildBuscadorAdicionales(
+                                semestre, aprobadasAntesDeSemestre),
+                            const SizedBox(height: 14),
+                          ],
+                        ),
+                ),
+              ],
             ),
           ),
-          if (expandido) ...[
-            if (materiasDelNivel.isNotEmpty) _seccion('Materias de la malla'),
-            ...materiasDelNivel.map((m) {
-              final reg = _registros.firstWhere(
-                  (r) => r.codigo == m.codigo && r.semestre == semestre,
-                  orElse: () =>
-                      RegistroMateria(codigo: '', semestre: 0, aprobada: false));
-              final tieneReg = reg.codigo.isNotEmpty;
-              final aprobadaAntes = semestre > 1 &&
-                  _registros.any((r) =>
-                      r.codigo == m.codigo &&
-                      r.semestre < semestre &&
-                      r.aprobada);
-              final homologadaExt = _estaHomologadaExterna(m.codigo);
+        ),
+      ),
+    );
+  }
 
-              return _FilaMateria(
-                nombre: m.nombre,
-                estado: homologadaExt
-                    ? _Estado.homologada
-                    : aprobadaAntes
-                        ? _Estado.aprobadaAntes
-                        : !tieneReg
-                            ? _Estado.sinRegistrar
-                            : reg.aprobada
-                                ? _Estado.aprobada
-                                : _Estado.perdida,
-                bloqueada: esPrimero || aprobadaAntes || homologadaExt,
-                etiquetaExtra: homologadaExt
-                    ? _homologacionesExternas
-                        .firstWhere((h) => h.codigoMateria == m.codigo)
-                        .nombrePrograma
-                    : null,
-                onAprobada: (esPrimero || aprobadaAntes || homologadaExt)
-                    ? null
-                    : () => _registrar(m.codigo, semestre, true),
-                onPerdida: (esPrimero || aprobadaAntes || homologadaExt)
-                    ? null
-                    : () => _registrar(m.codigo, semestre, false),
-                onQuitar:
-                    (esPrimero || aprobadaAntes || homologadaExt || !tieneReg)
-                        ? null
-                        : () => _quitarRegistro(m.codigo, semestre),
-              );
-            }),
-            () {
-              final adicionales = _registrosDeSemestre(semestre)
-                  .where((r) => !materiasDelNivel.any((m) => m.codigo == r.codigo))
-                  .toList();
-              if (adicionales.isEmpty) return const SizedBox.shrink();
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _seccion('Materias adicionales'),
-                  ...adicionales.map((r) {
-                    final mat = _todasLasMateriasYElectivas.firstWhere(
-                        (m) => m.codigo == r.codigo,
-                        orElse: () => Materia(
-                            codigo: r.codigo, nombre: r.codigo, creditos: 0, nivel: 0));
-                    return _FilaMateria(
-                      nombre: mat.nombre,
-                      estado: r.aprobada ? _Estado.aprobada : _Estado.perdida,
-                      bloqueada: false,
-                      onAprobada: () => _registrar(mat.codigo, semestre, true),
-                      onPerdida: () => _registrar(mat.codigo, semestre, false),
-                      onQuitar: () => _quitarRegistro(mat.codigo, semestre),
-                    );
-                  }),
-                ],
-              );
-            }(),
-            _buildBuscadorAdicionales(semestre, aprobadasAntesDeSemestre),
-            const SizedBox(height: 8),
-          ],
-        ],
+  /// Campo de promedio de UN semestre.
+  ///
+  /// El valor no limita a su propio semestre sino al siguiente: en la UTB el
+  /// cupo de creditos se define con el promedio que el estudiante traia al
+  /// matricular. Por eso el texto de ayuda habla siempre del semestre N+1,
+  /// y en el ultimo semestre cursado habla del plan que se va a generar.
+  Widget _buildPromedioSemestre(int semestre) {
+    final ctrl = _ctrlPromedioSem.putIfAbsent(semestre, () {
+      final guardado = _promediosPorSemestre[semestre];
+      return TextEditingController(
+        text: guardado == null ? '' : guardado.toStringAsFixed(1),
+      );
+    });
+
+    final valor = _promediosPorSemestre[semestre];
+    final escrito = ctrl.text.trim().isNotEmpty;
+    final valido = _promedioValido(valor);
+    final invalido = escrito && !valido;
+    final esUltimo = semestre == _semestresCursados;
+
+    // Cupo que este promedio habilita para el semestre siguiente.
+    final cupo = (valor != null && valor >= _promedioParaCupoAmpliado)
+        ? _maxCreditosPromedioAlto
+        : _maxCreditosPromedioBajo;
+
+    final Color color;
+    final String mensaje;
+    if (invalido) {
+      color = Colores.error;
+      mensaje = 'La nota debe estar entre '
+          '${_promedioMinimo.toStringAsFixed(1)} y '
+          '${_promedioMaximo.toStringAsFixed(1)}.';
+    } else if (!valido) {
+      color = Colores.textoSecundario;
+      mensaje = esUltimo
+          ? 'Con este promedio se calcula cuantos creditos puedes tomar en tu plan.'
+          : 'Con este promedio se calcula el cupo del semestre ${semestre + 1}.';
+    } else if (valor! >= _promedioParaCupoAmpliado) {
+      color = Colores.exitoOscuro;
+      mensaje = esUltimo
+          ? 'Promedio >= ${_promedioParaCupoAmpliado.toStringAsFixed(1)} -> tu plan usara hasta $cupo creditos por semestre.'
+          : 'Promedio >= ${_promedioParaCupoAmpliado.toStringAsFixed(1)} -> en el semestre ${semestre + 1} pudiste matricular hasta $cupo creditos.';
+    } else {
+      color = Colores.advertenciaOscura;
+      mensaje = esUltimo
+          ? 'Promedio < ${_promedioParaCupoAmpliado.toStringAsFixed(1)} -> tu plan usara hasta $cupo creditos por semestre.'
+          : 'Promedio < ${_promedioParaCupoAmpliado.toStringAsFixed(1)} -> en el semestre ${semestre + 1} solo pudiste matricular hasta $cupo creditos.';
+    }
+
+    // Pregunta: icono en su propia ficha + titular.
+    final titulo = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: Colores.primario.withValues(alpha: 0.09),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.bar_chart_rounded,
+              size: 16, color: Colores.primario),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '¿Con qué promedio terminaste el semestre $semestre?',
+              style: const TextStyle(
+                  fontSize: 13.5,
+                  height: 1.3,
+                  letterSpacing: -0.2,
+                  fontWeight: FontWeight.w700,
+                  color: Colores.textoTitulo),
+            ),
+          ),
+        ),
+      ],
+    );
+
+    final campo = TextField(
+      controller: ctrl,
+      keyboardType: TextInputType.number,
+      textAlign: TextAlign.center,
+      // maxLength 4 evita que 2.9999 se redondee a 3.0 por float
+      maxLength: 4,
+      inputFormatters: [FormatoDecimal()],
+      style: const TextStyle(
+          fontWeight: FontWeight.w800, fontSize: 17, letterSpacing: -0.3),
+      decoration: InputDecoration(
+        counterText: '',
+        hintText: '4.0',
+        isDense: true,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
+        filled: true,
+        fillColor: Colors.white,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          borderSide: BorderSide(
+              color: invalido ? Colores.error : Superficies.nieblaAzul),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          borderSide: const BorderSide(color: Colores.primario, width: 1.5),
+        ),
+      ),
+      onChanged: (texto) {
+        setState(() {
+          final p = double.tryParse(texto.trim());
+          if (p == null) {
+            _promediosPorSemestre.remove(semestre);
+          } else {
+            // Se recorta a 2 decimales igual que antes, para que
+            // 3.999 no cuente como 4.0 por precision de float.
+            _promediosPorSemestre[semestre] =
+                double.parse(p.toStringAsFixed(2));
+          }
+        });
+      },
+    );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
+      child: AnimatedContainer(
+        duration: Movimiento.corta,
+        curve: Movimiento.principal,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: invalido
+              ? Colores.error.withValues(alpha: 0.06)
+              : Superficies.brumaLavanda,
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          border: Border.all(
+            color: invalido
+                ? Colores.error.withValues(alpha: 0.5)
+                : Superficies.nieblaAzul,
+          ),
+        ),
+        child: LayoutBuilder(
+          builder: (context, cons) {
+            // Con el campo al lado del titulo, en un movil de 360dp al
+            // titular le quedan menos de 160px y parte la pregunta en
+            // cuatro lineas. Por debajo de ese ancho el campo baja a su
+            // propia fila y el titulo se lee de corrido.
+            final apretado = cons.maxWidth < 340;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (apretado) ...[
+                  titulo,
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      SizedBox(width: 104, child: campo),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Nota final del semestre, sobre 5.0',
+                          style: TextStyle(
+                              fontSize: 11.5, color: Colores.textoTenue),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(child: titulo),
+                      const SizedBox(width: 14),
+                      SizedBox(width: 96, child: campo),
+                    ],
+                  ),
+                const SizedBox(height: 10),
+                Text(mensaje,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        height: 1.35,
+                        color: color,
+                        fontWeight: FontWeight.w600)),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -1450,30 +2154,32 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
         _buscarMaterias(query, excluirSemestre: semestre, aprobadas: aprobadas);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
+          Presionable(
             // Si el limite de creditos fue alcanzado no se puede abrir el buscador
             onTap: limiteAlcanzado
                 ? null
                 : () => setState(() => _mostrarAdicional[semestre] = !mostrar),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: AnimatedContainer(
+              duration: Movimiento.corta,
+              curve: Movimiento.principal,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
               decoration: BoxDecoration(
                 color: limiteAlcanzado
-                    ? const Color(0xFFF3F4F6)
+                    ? Colores.fondoNeutro
                     : mostrar
-                        ? const Color(0xFF00D4FF).withOpacity(0.10)
-                        : const Color(0xFFF3F4F6),
-                borderRadius: BorderRadius.circular(8),
+                        ? Colores.acentoCian.withValues(alpha: 0.12)
+                        : Colores.acentoCian.withValues(alpha: 0.06),
+                borderRadius:
+                    BorderRadius.circular(Superficies.radioPildora),
                 border: Border.all(
                     color: limiteAlcanzado
-                        ? const Color(0xFFE5E7EB)
-                        : mostrar
-                            ? const Color(0xFF00D4FF)
-                            : const Color(0xFFE5E7EB)),
+                        ? Superficies.nieblaAzul
+                        : Colores.acentoCian
+                            .withValues(alpha: mostrar ? 0.9 : 0.35)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1486,25 +2192,29 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
                             : Icons.add_rounded,
                     size: 15,
                     color: limiteAlcanzado
-                        ? const Color(0xFF9CA3AF)
-                        : const Color(0xFF0E7490)),
-                  const SizedBox(width: 6),
-                  Text(
-                    limiteAlcanzado
-                        ? 'Limite de $creditosMax creditos alcanzado'
-                        : '¿Diste materias adicionales este semestre?',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: limiteAlcanzado
-                            ? const Color(0xFF9CA3AF)
-                            : const Color(0xFF0E7490),
-                        fontWeight: FontWeight.w500)),
+                        ? Colores.textoTenue
+                        : Colores.acentoCianOscuro),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Text(
+                      limiteAlcanzado
+                          ? 'Límite de $creditosMax créditos alcanzado'
+                          : '¿Diste materias adicionales este semestre?',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12,
+                          letterSpacing: -0.1,
+                          color: limiteAlcanzado
+                              ? Colores.textoTenue
+                              : Colores.acentoCianOscuro,
+                          fontWeight: FontWeight.w600)),
+                  ),
                 ],
               ),
             ),
           ),
           if (mostrar) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             TextField(
               controller: _ctrlAdicional[semestre],
               decoration: _inputDeco(
@@ -1513,71 +2223,90 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
               onChanged: (v) => setState(() => _busqAdicional[semestre] = v),
             ),
             if (query.isNotEmpty)
-              ...resultados.take(5).map((m) {
-                // Verificar si agregar esta materia excederia el limite de creditos
-                final excederia = creditosDisponibles < m.creditos;
-                return Container(
-                  margin: const EdgeInsets.only(top: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF9FAFB),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(m.nombre,
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: excederia
-                                        ? const Color(0xFF9CA3AF)
-                                        : const Color(0xFF1A1A2E))),
-                            Text(
-                              excederia
-                                  ? '${m.creditos} cr · excede el limite ($creditosDisponibles disponibles)'
-                                  : '${m.creditos} cr · quedan $creditosDisponibles disponibles',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: excederia
-                                      ? const Color(0xFFFF6B6B)
-                                      : const Color(0xFF9CA3AF))),
-                          ],
-                        ),
-                      ),
-                      if (!excederia) ...[
-                        _mini('Aprobé', const Color(0xFF4ADE00), () {
-                          _registrar(m.codigo, semestre, true);
-                          setState(() {
-                            _busqAdicional[semestre] = '';
-                            _ctrlAdicional[semestre]!.clear();
-                            _mostrarAdicional[semestre] = false;
-                          });
-                        }),
-                        const SizedBox(width: 6),
-                        _mini('Perdí', const Color(0xFFFF6B6B), () {
-                          _registrar(m.codigo, semestre, false);
-                          setState(() {
-                            _busqAdicional[semestre] = '';
-                            _ctrlAdicional[semestre]!.clear();
-                            _mostrarAdicional[semestre] = false;
-                          });
-                        }),
-                      ],
-                    ],
-                  ),
-                );
-              }),
+              // Bucle con indice en vez de map: `Revelar` necesita la
+              // posicion para escalonar la cascada.
+              for (int i = 0; i < resultados.length && i < 5; i++)
+                Revelar(
+                  indice: i,
+                  desplazamiento: 14,
+                  child: _resultadoAdicional(
+                      resultados[i], semestre, creditosDisponibles),
+                ),
             if (query.isNotEmpty && resultados.isEmpty)
               const Padding(
-                padding: EdgeInsets.only(top: 8),
+                padding: EdgeInsets.only(top: 10),
                 child: Text('No se encontraron materias',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                    style: TextStyle(fontSize: 12, color: Colores.textoTenue)),
               ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Una fila de resultado del buscador de materias adicionales.
+  Widget _resultadoAdicional(
+      Materia m, int semestre, int creditosDisponibles) {
+    // Verificar si agregar esta materia excederia el limite de creditos
+    final excederia = creditosDisponibles < m.creditos;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+      decoration: BoxDecoration(
+        color: Superficies.brumaLavanda,
+        borderRadius: BorderRadius.circular(Superficies.radioInterior),
+        border: Border.all(
+          color: excederia
+              ? Colores.error.withValues(alpha: 0.3)
+              : Superficies.nieblaAzul,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(m.nombre,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.2,
+                        color: excederia
+                            ? Colores.textoTenue
+                            : Colores.textoTitulo)),
+                const SizedBox(height: 2),
+                Text(
+                    excederia
+                        ? '${m.creditos} cr · excede el límite ($creditosDisponibles disponibles)'
+                        : '${m.creditos} cr · quedan $creditosDisponibles disponibles',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: excederia
+                            ? Colores.error
+                            : Colores.textoTenue)),
+              ],
+            ),
+          ),
+          if (!excederia) ...[
+            const SizedBox(width: 8),
+            _mini('Aprobé', Colores.exito, () {
+              _registrar(m.codigo, semestre, true);
+              setState(() {
+                _busqAdicional[semestre] = '';
+                _ctrlAdicional[semestre]!.clear();
+                _mostrarAdicional[semestre] = false;
+              });
+            }),
+            const SizedBox(width: 6),
+            _mini('Perdí', Colores.error, () {
+              _registrar(m.codigo, semestre, false);
+              setState(() {
+                _busqAdicional[semestre] = '';
+                _ctrlAdicional[semestre]!.clear();
+                _mostrarAdicional[semestre] = false;
+              });
+            }),
           ],
         ],
       ),
@@ -1585,330 +2314,133 @@ class _PantallaHistorialState extends State<PantallaHistorial> {
   }
 
   // ── Widgets reutilizables ─────────────────────────────────
-  Widget _btnPrimario(String label, VoidCallback onTap) => SizedBox(
-        width: double.infinity,
-        height: 52,
-        child: ElevatedButton(
-          onPressed: onTap,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF1A1FC8),
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            elevation: 0,
-          ),
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-        ),
-      );
+  // _btnPrimario desaparecio: los CTA del wizard ahora son BotonIsla, que
+  // es el boton del sistema (icono anidado en su propio circulo).
 
-  Widget _btnSecundario(VoidCallback onTap) => SizedBox(
-        width: 52,
-        height: 52,
-        child: OutlinedButton(
-          onPressed: onTap,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF1A1FC8),
-            side: const BorderSide(color: Color(0xFF1A1FC8)),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            padding: EdgeInsets.zero,
-          ),
-          child: const Icon(Icons.arrow_back_rounded),
-        ),
-      );
-
-  Widget _mini(String label, Color color, VoidCallback onTap) => GestureDetector(
+  /// Boton de retroceso. Misma altura que BotonIsla para que la fila de
+  /// acciones quede alineada.
+  Widget _btnSecundario(VoidCallback onTap) => Presionable(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          width: 56,
+          height: 56,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: color.withOpacity(0.4)),
+            color: Superficies.brumaLavanda,
+            borderRadius: BorderRadius.circular(Superficies.radioPildora),
+            border: Border.all(
+                color: Colores.primario.withValues(alpha: 0.25)),
+          ),
+          child: const Icon(Icons.arrow_back_rounded,
+              size: 20, color: Colores.primario),
+        ),
+      );
+
+  Widget _mini(String label, Color color, VoidCallback onTap) => Presionable(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(Superficies.radioPildora),
+            border: Border.all(color: color.withValues(alpha: 0.4)),
           ),
           child: Text(label,
               style: TextStyle(
                   fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: color == const Color(0xFF4ADE00)
-                      ? const Color(0xFF166534)
-                      : const Color(0xFF991B1B))),
+                  fontWeight: FontWeight.w700,
+                  color: color == Colores.exito
+                      ? Colores.exitoOscuro
+                      : Colores.errorOscuro)),
         ),
       );
 
-  Widget _pill(String label, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-        decoration:
-            BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
+  /// Etiqueta de estado del encabezado de semestre. [colorTexto] existe
+  /// porque el blanco sobre el amarillo de advertencia no tiene contraste.
+  Widget _pill(String label, Color color,
+          {Color colorTexto = Colors.white}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+        decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(Superficies.radioPildora)),
         child: Text(label,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+            style: TextStyle(
+                color: colorTexto,
+                fontSize: 9.5,
+                letterSpacing: 0.4,
+                fontWeight: FontWeight.w800)),
       );
 
+  /// Rotulo de seccion dentro de una tarjeta de semestre. Usa la Cejilla del
+  /// sistema en vez de un texto gris suelto.
   Widget _seccion(String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
-        child: Text(label,
-            style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF9CA3AF),
-                letterSpacing: 0.5)),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Cejilla(label),
+        ),
       );
 
-  Widget _stat(String label, String valor) => Expanded(
+  /// Duracion del conteo de las cifras y del relleno de la barra.
+  ///
+  /// AJUSTA AQUI la velocidad del contador. Es la misma para las cifras y
+  /// para la barra a proposito: son la misma informacion contada de dos
+  /// formas y deben aterrizar a la vez, asi que un solo numero las gobierna.
+  /// Mas milisegundos = mas lento. Por debajo de ~900 el rodado se percibe
+  /// como un parpadeo; por encima de ~3000 el usuario ya esta esperando.
+  static const Duration _duracionContador = Duration(milliseconds: 1900);
+
+  /// Estilo de las cifras del panel. Se declara aparte porque el contador
+  /// rodante lo necesita para medir la altura de la cinta de digitos.
+  static const TextStyle _estiloCifra = TextStyle(
+      color: Colors.white,
+      fontSize: 19,
+      letterSpacing: -0.6,
+      fontWeight: FontWeight.w800);
+
+  Widget _stat(String label, int valor, {String sufijo = ''}) => Expanded(
         child: Column(children: [
-          Text(valor,
+          NumeroRodante(
+              valor: valor,
+              sufijo: sufijo,
+              estilo: _estiloCifra,
+              duracion: _duracionContador),
+          const SizedBox(height: 3),
+          Text(label.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                  color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
-          Text(label,
-              style: const TextStyle(color: Color(0xFFADB5FF), fontSize: 10)),
+                  color: Colores.primarioSuave,
+                  fontSize: 9,
+                  letterSpacing: 0.9,
+                  fontWeight: FontWeight.w600)),
         ]),
       );
 
-  Widget _divV() =>
-      Container(height: 22, width: 1, color: Colors.white.withOpacity(0.25));
+  Widget _divV() => Container(
+        height: 26,
+        width: 1,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.18),
+          borderRadius: BorderRadius.circular(Superficies.radioPildora),
+        ),
+      );
 
-  InputDecoration _inputDeco(String hint, {required IconData icon}) => InputDecoration(
+  InputDecoration _inputDeco(String hint, {required IconData icon}) =>
+      InputDecoration(
         hintText: hint,
-        prefixIcon: Icon(icon, color: const Color(0xFF9CA3AF), size: 18),
+        hintStyle: const TextStyle(fontSize: 13.5, color: Colores.textoTenue),
+        prefixIcon: Icon(icon, color: Colores.textoTenue, size: 18),
         filled: true,
         fillColor: Colors.white,
         contentPadding: const EdgeInsets.symmetric(vertical: 0),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          borderSide: const BorderSide(color: Superficies.nieblaAzul),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFF1A1FC8), width: 2),
+          borderRadius: BorderRadius.circular(Superficies.radioInterior),
+          borderSide: const BorderSide(color: Colores.primario, width: 2),
         ),
       );
-}
-
-// ── Estados de fila ───────────────────────────────────────────
-enum _Estado { sinRegistrar, aprobada, perdida, aprobadaAntes, homologada }
-
-// ── Fila de materia ───────────────────────────────────────────
-class _FilaMateria extends StatelessWidget {
-  final String nombre;
-  final _Estado estado;
-  final bool bloqueada;
-  final String? etiquetaExtra;
-  final VoidCallback? onAprobada;
-  final VoidCallback? onPerdida;
-  final VoidCallback? onQuitar;
-
-  const _FilaMateria({
-    required this.nombre,
-    required this.estado,
-    required this.bloqueada,
-    this.etiquetaExtra,
-    this.onAprobada,
-    this.onPerdida,
-    this.onQuitar,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    Color bg;
-    Widget trailing;
-
-    switch (estado) {
-      case _Estado.aprobada:
-        bg = const Color(0xFF4ADE00).withOpacity(0.05);
-        trailing = Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_rounded, color: Color(0xFF4ADE00), size: 18),
-          if (onQuitar != null) ...[
-            const SizedBox(width: 8),
-            GestureDetector(
-                onTap: onQuitar,
-                child: const Icon(Icons.close, color: Color(0xFF9CA3AF), size: 14)),
-          ],
-        ]);
-        break;
-      case _Estado.perdida:
-        bg = const Color(0xFFFF6B6B).withOpacity(0.05);
-        trailing = Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.cancel_rounded, color: Color(0xFFFF6B6B), size: 18),
-          if (onQuitar != null) ...[
-            const SizedBox(width: 8),
-            GestureDetector(
-                onTap: onQuitar,
-                child: const Icon(Icons.close, color: Color(0xFF9CA3AF), size: 14)),
-          ],
-        ]);
-        break;
-      case _Estado.aprobadaAntes:
-        bg = const Color(0xFFF9FAFB);
-        trailing = const Text('Ya aprobada',
-            style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)));
-        break;
-      case _Estado.homologada:
-        bg = const Color(0xFF7C3AED).withOpacity(0.05);
-        trailing = Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.verified_rounded, color: Color(0xFF7C3AED), size: 16),
-          const SizedBox(width: 4),
-          Text(etiquetaExtra ?? 'Homologada',
-              style: const TextStyle(
-                  fontSize: 10, color: Color(0xFF7C3AED), fontWeight: FontWeight.w600)),
-        ]);
-        break;
-      default:
-        bg = Colors.white;
-        trailing = bloqueada
-            ? const SizedBox.shrink()
-            : Row(mainAxisSize: MainAxisSize.min, children: [
-                GestureDetector(
-                  onTap: onAprobada,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF4ADE00).withOpacity(0.10),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text('Aprobé',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF166534))),
-                  ),
-                ),
-                const SizedBox(width: 5),
-                GestureDetector(
-                  onTap: onPerdida,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF6B6B).withOpacity(0.10),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text('Perdí',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF991B1B))),
-                  ),
-                ),
-              ]);
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(
-        color: bg,
-        border: const Border(top: BorderSide(color: Color(0xFFF3F4F6))),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(nombre,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: estado == _Estado.aprobadaAntes
-                        ? const Color(0xFF9CA3AF)
-                        : const Color(0xFF374151),
-                    fontStyle: estado == _Estado.aprobadaAntes
-                        ? FontStyle.italic
-                        : FontStyle.normal)),
-          ),
-          const SizedBox(width: 8),
-          trailing,
-        ],
-      ),
-    );
-  }
-}
-
-// ── Card homologación externa ──────────────────────────────────
-class _CardHomologacion extends StatefulWidget {
-  final Materia materia;
-  final bool yaAgregada;
-  final void Function(String programa) onAgregar;
-  final VoidCallback onQuitar;
-
-  const _CardHomologacion({
-    required this.materia,
-    required this.yaAgregada,
-    required this.onAgregar,
-    required this.onQuitar,
-  });
-
-  @override
-  State<_CardHomologacion> createState() => _CardHomologacionState();
-}
-
-class _CardHomologacionState extends State<_CardHomologacion> {
-  String _prog = 'Talento Tech';
-  final _opciones = [
-    'Talento Tech',
-    'Acuerdo con director',
-    'Transferencia externa',
-    'Otro',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: widget.yaAgregada
-            ? const Color(0xFF7C3AED).withOpacity(0.07)
-            : Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: widget.yaAgregada ? const Color(0xFF7C3AED) : const Color(0xFFE5E7EB),
-          width: widget.yaAgregada ? 1.5 : 1,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(widget.materia.nombre,
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1A1A2E))),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text('Mediante:',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-              const SizedBox(width: 8),
-              DropdownButton<String>(
-                value: _prog,
-                isDense: true,
-                underline: const SizedBox(),
-                items: _opciones
-                    .map((o) => DropdownMenuItem(
-                        value: o,
-                        child: Text(o, style: const TextStyle(fontSize: 13))))
-                    .toList(),
-                onChanged: (v) => setState(() => _prog = v!),
-              ),
-              const Spacer(),
-              widget.yaAgregada
-                  ? TextButton(
-                      onPressed: widget.onQuitar,
-                      child: const Text('Quitar',
-                          style: TextStyle(fontSize: 12, color: Color(0xFF7C3AED))),
-                    )
-                  : ElevatedButton(
-                      onPressed: () => widget.onAgregar(_prog),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF7C3AED),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                      ),
-                      child: const Text('Homologar',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 }

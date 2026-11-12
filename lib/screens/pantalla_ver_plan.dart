@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import '../services/servicio_api.dart';
 import '../utils/sesion_helper.dart';
 import '../models/modelo_plan.dart';
+import '../theme/colores.dart';
+import '../widgets/superficie.dart';
 
 class PantallaVerPlan extends StatefulWidget {
   final String token;
@@ -45,7 +47,10 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
       
       // Convertir el mapa a RespuestaPlan
       final respuestaPlan = RespuestaPlan.fromJson(datosPlan['plan_generado']);
-      
+
+      // El usuario pudo navegar hacia atras mientras la peticion estaba en
+      // vuelo; sin esta guarda setState revienta con "called after dispose".
+      if (!mounted) return;
       setState(() {
         _plan = respuestaPlan;
         _cargando = false;
@@ -53,6 +58,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
     } on SesionExpiradaException {
       if (mounted) await SesionHelper.manejarSesionExpirada(context);
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _cargando = false;
@@ -63,15 +69,15 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
   Color _getOrigenColor(String origen) {
     switch (origen) {
       case 'principal':
-        return Colors.blue;
+        return Colores.primario;
       case 'secundario':
-        return Colors.green;
+        return Colores.exitoOscuro;
       case 'compartida':
-        return Colors.amber;
+        return Colores.advertenciaFuerte;
       case 'practica':
-        return Colors.purple.shade900;
+        return Colores.acentoMorado;
       default:
-        return Colors.grey;
+        return Colores.textoTenue;
     }
   }
 
@@ -90,17 +96,38 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
     }
   }
 
+  /// Semestres cuya animacion de entrada ya se ejecuto.
+  ///
+  /// ListView.builder destruye los items que salen de pantalla y los
+  /// reconstruye al volver; sin esto la animacion se repetiria cada vez
+  /// que el usuario sube. Este Set vive en el State, que no se destruye.
+  final Set<int> _semestresRevelados = {};
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2FF),
+      backgroundColor: Colores.fondoApp,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1FC8),
+        // flexibleSpace y no backgroundColor: backgroundColor pinta un
+        // rectangulo recto, y aqui hacen falta las esquinas inferiores
+        // redondeadas del resto de la app.
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: Container(
+          // Container y no DecoratedBox: en flexibleSpace el hijo recibe
+          // restricciones sueltas y un DecoratedBox sin hijo mide cero, asi
+          // que no se pintaba nada.
+          decoration: const BoxDecoration(
+            color: Colores.primario,
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+          ),
+        ),
         title: const Text(
           'Plan Guardado',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+              fontWeight: FontWeight.w700, fontSize: 17, letterSpacing: -0.3),
         ),
         actions: [
           IconButton(
@@ -116,12 +143,12 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   CircularProgressIndicator(
-                    color: Color(0xFF1A1FC8),
+                    color: Colores.primario,
                   ),
                   SizedBox(height: 16),
                   Text(
                     'Cargando plan...',
-                    style: TextStyle(color: Color(0xFF6B7280)),
+                    style: TextStyle(color: Colores.textoSecundario),
                   ),
                 ],
               ),
@@ -137,13 +164,13 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                           width: 80,
                           height: 80,
                           decoration: BoxDecoration(
-                            color: Colors.red.shade50,
+                            color: Colores.error.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(40),
                           ),
                           child: const Icon(
                             Icons.error_outline,
                             size: 40,
-                            color: Colors.red,
+                            color: Colores.error,
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -152,7 +179,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1A2E),
+                            color: Colores.textoTitulo,
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -163,7 +190,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF6B7280),
+                              color: Colores.textoSecundario,
                             ),
                           ),
                         ),
@@ -171,7 +198,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                         ElevatedButton(
                           onPressed: () => Navigator.pop(context),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1A1FC8),
+                            backgroundColor: Colores.primario,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 32,
                               vertical: 12,
@@ -198,11 +225,17 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                       itemCount: _plan!.semestres.length,
                       itemBuilder: (context, index) {
                         final semestre = _plan!.semestres[index];
-                        return Card(
+                        final yaRevelado =
+                            _semestresRevelados.contains(index);
+                        return RevelarProfundidad(
+                          indice: index,
+                          animar: !yaRevelado,
+                          alTerminar: () => _semestresRevelados.add(index),
+                          builder: (context, progreso) => Card(
                           margin: const EdgeInsets.only(bottom: 16),
                           elevation: 2,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(Superficies.radioTarjeta),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -212,13 +245,13 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
                                   color: semestre.esPrimero
-                                      ? Colors.deepPurple.shade100
+                                      ? Colores.acentoMorado.withValues(alpha: 0.16)
                                       : semestre.esUltimo
-                                          ? Colors.orange.shade100
-                                          : Colors.grey.shade100,
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(16),
-                                    topRight: Radius.circular(16),
+                                          ? Colores.acentoNaranja.withValues(alpha: 0.14)
+                                          : Superficies.brumaLavanda,
+                                  borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(
+                                        Superficies.radioTarjeta),
                                   ),
                                 ),
                                 child: Row(
@@ -231,8 +264,8 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                           height: 40,
                                           decoration: BoxDecoration(
                                             color: semestre.esUltimo
-                                                ? Colors.orange
-                                                : const Color(0xFF1A1FC8),
+                                                ? Colores.acentoNaranja
+                                                : Colores.primario,
                                             borderRadius: BorderRadius.circular(12),
                                           ),
                                           child: Center(
@@ -255,7 +288,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                               style: const TextStyle(
                                                 fontSize: 18,
                                                 fontWeight: FontWeight.bold,
-                                                color: Color(0xFF1A1A2E),
+                                                color: Colores.textoTitulo,
                                               ),
                                             ),
                                             if (semestre.esUltimo)
@@ -263,7 +296,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                 'Práctica Profesional',
                                                 style: TextStyle(
                                                   fontSize: 12,
-                                                  color: Colors.orange,
+                                                  color: Colores.acentoNaranja,
                                                   fontWeight: FontWeight.w500,
                                                 ),
                                               ),
@@ -277,7 +310,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                         vertical: 6,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF1A1FC8),
+                                        color: Colores.primario,
                                         borderRadius: BorderRadius.circular(20),
                                       ),
                                       child: Text(
@@ -296,8 +329,15 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                               Padding(
                                 padding: const EdgeInsets.all(12),
                                 child: Column(
-                                  children: semestre.materias.map((materia) {
-                                    return Padding(
+                                  children: semestre.materias
+                                      .asMap()
+                                      .entries
+                                      .map((entrada) {
+                                    final materia = entrada.value;
+                                    return RevelarApilado(
+                                      indice: entrada.key,
+                                      progreso: progreso,
+                                      child: Padding(
                                       padding: const EdgeInsets.only(bottom: 12),
                                       child: Row(
                                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -320,7 +360,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                   style: const TextStyle(
                                                     fontSize: 15,
                                                     fontWeight: FontWeight.w500,
-                                                    color: Color(0xFF1A1A2E),
+                                                    color: Colores.textoTitulo,
                                                   ),
                                                 ),
                                                 const SizedBox(height: 4),
@@ -330,7 +370,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                       materia.codigo,
                                                       style: TextStyle(
                                                         fontSize: 11,
-                                                        color: Colors.grey.shade600,
+                                                        color: Colores.textoSecundario,
                                                         fontFamily: 'monospace',
                                                       ),
                                                     ),
@@ -339,7 +379,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                       width: 4,
                                                       height: 4,
                                                       decoration: BoxDecoration(
-                                                        color: Colors.grey.shade400,
+                                                        color: Colores.textoTenue,
                                                         shape: BoxShape.circle,
                                                       ),
                                                     ),
@@ -348,7 +388,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                       '${materia.creditos} créditos',
                                                       style: TextStyle(
                                                         fontSize: 11,
-                                                        color: Colors.grey.shade600,
+                                                        color: Colores.textoSecundario,
                                                       ),
                                                     ),
                                                     const SizedBox(width: 8),
@@ -356,7 +396,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                       width: 4,
                                                       height: 4,
                                                       decoration: BoxDecoration(
-                                                        color: Colors.grey.shade400,
+                                                        color: Colores.textoTenue,
                                                         shape: BoxShape.circle,
                                                       ),
                                                     ),
@@ -368,7 +408,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                       ),
                                                       decoration: BoxDecoration(
                                                         color: _getOrigenColor(materia.origen)
-                                                            .withOpacity(0.1),
+                                                            .withValues(alpha: 0.1),
                                                         borderRadius: BorderRadius.circular(10),
                                                       ),
                                                       child: Text(
@@ -392,10 +432,10 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                 vertical: 4,
                                               ),
                                               decoration: BoxDecoration(
-                                                color: Colors.amber.shade100,
+                                                color: Colores.advertencia.withValues(alpha: 0.18),
                                                 borderRadius: BorderRadius.circular(12),
                                                 border: Border.all(
-                                                  color: Colors.amber.shade300,
+                                                  color: Colores.advertencia,
                                                   width: 0.5,
                                                 ),
                                               ),
@@ -404,12 +444,13 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                                 style: TextStyle(
                                                   fontSize: 10,
                                                   fontWeight: FontWeight.bold,
-                                                  color: Colors.amber,
+                                                  color: Colores.advertenciaFuerte,
                                                 ),
                                               ),
                                             ),
                                         ],
                                       ),
+                                    ),
                                     );
                                   }).toList(),
                                 ),
@@ -419,7 +460,7 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                 Container(
                                   padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
-                                    color: Colors.orange.shade50,
+                                    color: Colores.acentoNaranja.withValues(alpha: 0.08),
                                     borderRadius: const BorderRadius.only(
                                       bottomLeft: Radius.circular(16),
                                       bottomRight: Radius.circular(16),
@@ -430,14 +471,14 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                       const Icon(
                                         Icons.work_outline,
                                         size: 16,
-                                        color: Colors.orange,
+                                        color: Colores.acentoNaranja,
                                       ),
                                       const SizedBox(width: 8),
                                       const Text(
                                         'Semestre de práctica profesional',
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: Colors.orange,
+                                          color: Colores.acentoNaranja,
                                         ),
                                       ),
                                       const Spacer(),
@@ -446,13 +487,14 @@ class _PantallaVerPlanState extends State<PantallaVerPlan> {
                                         style: TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.bold,
-                                          color: Colors.orange.shade700,
+                                          color: Colores.acentoNaranja,
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
                             ],
+                          ),
                           ),
                         );
                       },
