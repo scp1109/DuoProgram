@@ -47,6 +47,11 @@ dependencies:
 
   path_provider: ^2.1.4
 
+  # Tipografia. Roboto (la que traia el tema) es una fuente de sistema
+  # generica; Plus Jakarta Sans es una grotesca con mas caracter y mejor
+  # ritmo en titulares grandes, sin dejar de ser muy legible en parrafos.
+  google_fonts: ^6.2.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
